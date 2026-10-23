@@ -38,9 +38,9 @@ Then open Wolvden. Canto's campfire sits just above Twill's stag. Click it, or p
 In **Files**, load your lore file, start a new pack, or try the sample
 [Hollowmere pack](hollowmere-lore.md).
 
-During the beta, updates are by hand: when a new version is posted in **#beta-test** on the
-Society of Fur Discord, click the install link again. Nothing you have written is lost when
-it updates.
+Updates happen by themselves after that, the same way Twill's do. Nothing you have written is
+lost when it updates. If you installed version 0.1.0, click the install link once more: versions
+from 0.1.1 on keep themselves up to date.
 
 ## What is in it
 
