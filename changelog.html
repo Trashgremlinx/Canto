@@ -13,7 +13,7 @@
   :root{
     /* One look, the same as Canto's page: bark and ember by firelight. */
     --page:#1f1912; --paper:#2c241a; --edge:#4a3d2c; --ink:#eadfce; --soft:#bba98f;
-    --ember:#e2692f; --flame:#e8a24c; --ash:#a9a097; --moss:#8fae6a; --sky:#6fa3b0; --on:#1f1209;
+    --ember:#e2692f; --flame:#e8a24c; --ash:#a9a097; --moss:#8fae6a; --sky:#6fa3b0;--blue:#5f8ee8; --on:#1f1209;
     --disp:Eczar,Georgia,serif; --body:Commissioner,system-ui,-apple-system,"Segoe UI",sans-serif;
     color-scheme:dark;
   }
@@ -182,7 +182,7 @@
   .chip{display:inline-flex;align-items:center;gap:6px;border:0;cursor:pointer;font:700 12.5px var(--body);letter-spacing:.08em;text-transform:uppercase;padding:5px 12px;border-radius:999px;color:var(--on)}
   .chip[aria-pressed="false"]{opacity:.4}
   .chip:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
-  .k-all{background:var(--ink)} .k-n{background:var(--ember)} .k-u{background:var(--flame)} .k-f{background:var(--ash)}
+  .k-all{background:var(--ink)} .k-n{background:var(--ember)} .k-u{background:var(--blue)} .k-f{background:var(--ash)}
   .k-v{background:var(--sky)} .k-c{background:none;color:var(--moss);box-shadow:inset 0 0 0 2px var(--moss)} .k-p{background:var(--moss)}
   .intro{text-align:center;color:var(--soft);font-size:15px;margin:14px auto 0;max-width:62ch}
 
@@ -207,7 +207,7 @@
   li:first-child{border-top:0}
   li[hidden]{display:none}
   .w{flex:none;width:96px;font:700 11.5px var(--body);letter-spacing:.1em;text-transform:uppercase;padding:1px 0 1px 8px;border-left:4px solid}
-  .w.n{color:var(--ember);border-color:var(--ember)} .w.u{color:var(--flame);border-color:var(--flame)} .w.f{color:var(--ash);border-color:var(--ash)}
+  .w.n{color:var(--ember);border-color:var(--ember)} .w.u{color:var(--blue);border-color:var(--blue)} .w.f{color:var(--ash);border-color:var(--ash)}
   .w.v{color:var(--sky);border-color:var(--sky)} .w.c{color:var(--moss);border-color:var(--moss);border-left-style:dashed} .w.p{color:var(--moss);border-color:var(--moss)}
   li b{font-weight:600}
   li .d{display:block;color:var(--soft);font-size:14.5px}
@@ -293,6 +293,7 @@
   <div class="key" role="group" aria-label="Show">
     <button type="button" class="chip k-all" aria-pressed="true" data-f="all">Everything</button>
     <button type="button" class="chip k-n" aria-pressed="true" data-f="n">New</button>
+    <button type="button" class="chip k-u" aria-pressed="true" data-f="u">Updated</button>
     <button type="button" class="chip k-f" aria-pressed="true" data-f="f">Fixed</button>
     <button type="button" class="chip k-c" aria-pressed="true" data-f="c">Coming</button>
     <button type="button" class="chip k-p" aria-pressed="true" data-f="p">Planned</button>
