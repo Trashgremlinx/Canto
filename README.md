@@ -49,7 +49,7 @@ Five tabs in Canto's hub, and the pieces it adds to your own Wolvden pages.
 | | |
 |---|---|
 | **Language** | Your pack's own words, softly underlined on your den and your own wolves. Hover or tap one for its card: the word, how to say it, what kind of word, its meaning |
-| **Bloodlines** | A card under Twill's Lore panel with the wolf's line, its role and its lore birth, all changeable right there. On your den each wolf glows in its line's colour, and the **Show** bar lights one bloodline at a time |
+| **Bloodlines** | A card under Twill's Lore panel with the wolf's line, its role and its lore birth, all changeable right there. On your den each wolf shows its line's colour in the style you pick (a glow, an edge, its name bar and more), and the **Show** bar lights one bloodline at a time. Studs you borrow from other players go under **Outside studs** |
 | **Families** | Two lines meet to make a named family, which is a line of its own and can meet another later. On a pup's Family page, Canto asks you to name the family when its parents' lines have never met |
 | **Calendar** | Count your pack's years by Wolvden's seasons or by one wolf's age, give the seasons your own names, and add events that happen every year or just once. What's coming shows on the wheel and at the top of the hub |
 | **Names waiting** | Names saved for future pups, optionally for a line. Offered on a pup's card and beside Wolvden's rename box: tap to copy. Crossed off once a wolf wears one, with an undo |
@@ -80,6 +80,9 @@ Hollow + Ashen = Emberfall
 
 ## Wolves
 Ashpaw (12345678): Emberfall, Healer, born late Greening, Year 4
+
+## Outside studs
+Ravenmoor (18822101): Ashen
 
 ## Roles
 Alpha, Healer, Scout, Storykeeper
