@@ -44,7 +44,7 @@ from 0.1.1 on keep themselves up to date.
 
 ## What is in it
 
-Five tabs in Canto's hub, and the pieces it adds to your own Wolvden pages.
+Canto's hub opens on a list of its sections, with Help & About behind the blue **?**. Here's what each does, and the pieces Canto adds to your own Wolvden pages.
 
 | | |
 |---|---|
@@ -56,7 +56,7 @@ Five tabs in Canto's hub, and the pieces it adds to your own Wolvden pages.
 | **Calendar** | Count your pack's years by Wolvden's seasons or by one wolf's age, give the seasons your own names, and add events that happen every year or just once. What's coming shows on the wheel and at the top of the hub |
 | **Names waiting** | Names saved for future pups, optionally for a line. Offered on a pup's card and beside Wolvden's rename box: tap to copy. Crossed off once a wolf wears one, with an undo |
 | **Files** | Keep a lore file for each pack and switch between them. **Save my lore file** writes a fresh copy, **Copy what changed** gives just the new lines to paste |
-| **Help & About** | Report a problem, ask a question or suggest an idea, with the form filled in for you. Links to learn more, and everything about Canto |
+| **Help & About** (the **?**) | Report a problem, ask a question or suggest an idea, with the form filled in for you. Links to learn more, and everything about Canto |
 
 And a **look** of its own in bark and ember, or one that follows your Twill theme.
 
