@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canto
 // @namespace    fallowe.canto
-// @version      0.1.9.1
+// @version      0.2.0
 // @description  Canto hooks your pack's own lore into Wolvden: its words, its bloodlines, its calendar and its names. An add-on for Twill; Twill must be installed. It only reads the page you have open and never plays the game for you.
 // @author       Fallowe (Society of Fur)
 // @homepageURL  https://trashgremlinx.github.io/Canto/
@@ -23,7 +23,7 @@
   if (window.__canto) return;
   window.__canto = true;
 
-  const VERSION = '0.1.9.1';
+  const VERSION = '0.2.0';
   /* Versions work like Twill's: a new feature moves the middle number (0.2.0), an update the last
      (0.1.10), and a fix adds a hidden fourth (0.1.9.1) so Tampermonkey still updates. Players see
      three numbers; reports carry the full one. */
@@ -484,12 +484,13 @@
     if (e.day && dd !== e.day) return false;
     if (!e.day && e.part && partOf(dd) !== e.part) return false;
     if (!e.every) { const y = yearOn(L, d); if (y == null || y !== e.y) return false; }
+    if (e.notY != null && yearOn(L, d) === e.notY) return false;   // a remembrance skips the year of the death itself
     return true;
   }
   // What's coming in the next year of days: each event's next day, soonest first.
   function coming(L, span = 24) {
     const t = today(), out = [];
-    for (const e of L.cal.events) {
+    for (const e of L.cal.events.concat(dynEvents(L))) {
       for (let i = 0; i < span; i++) if (eventOn(L, e, t + i)) { out.push({ e, in: i }); break; }
     }
     return out.sort((a, b) => a.in - b.in);
@@ -506,6 +507,9 @@
     if (/^\/den(\/\d+)?\/?$/.test(p)) return { kind: 'den' };
     if ((m = p.match(/^\/wolf\/(\d+)/))) return { kind: 'wolf', id: m[1] };
     if ((m = p.match(/^\/family\/(\d+)\/?$/))) return { kind: 'family', id: m[1] };
+    // The Pack Dynasty: its two lists, and a dead wolf's own page
+    if ((m = p.match(/^\/dynasty\/wolf\/(\d+)/))) return { kind: 'dynwolf', did: m[1] };
+    if ((m = p.match(/^\/dynasty\/(\d+)(\/pack-members)?\/?$/))) return { kind: 'dynlist', owner: m[1], leads: !m[2] };
     return { kind: 'other' };
   }
   // The player's own name and profile, from the bar at the top of every page.
@@ -840,6 +844,13 @@
   .cn-tmain .cn-tbar { margin-top: 0; }
   .cn-tmain .cn-empty { margin-top: 0; border-top: 0; }
   @media (max-width: 700px) { .cn-twide { grid-template-columns: 1fr; } }
+  /* the Pack Dynasty: remembered wolves */
+  .cn-mem { display: inline-flex; align-items: center; gap: 5px; font: 600 10px var(--cn-body); letter-spacing: .06em; text-transform: uppercase; color: #cbbfe0; border: 1px solid #5d5373; border-radius: 4px; padding: 0 6px; }
+  .cn-mem i { width: 7px; height: 7px; border-radius: 50%; background: #cbbfe0; box-shadow: 0 0 6px #cbbfe0; }
+  .cn .cn-wl a.cn-go.gone { color: #b9b3c9 !important; font-style: italic; }
+  .cn .cn-wl a.cn-go.gone::after { content: ' ✦'; color: #cbbfe0; font-style: normal; font-size: 10px; }
+  .cn-qm { display: inline-grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; border: 1px dashed #8a7a62; font: 700 10px var(--cn-body); color: #bfae95; margin-right: 5px; cursor: help; vertical-align: middle; }
+  td.cn-dcol { white-space: nowrap; }
   .cn-kind { font: 700 9.5px var(--cn-body); letter-spacing: .06em; text-transform: uppercase; color: var(--cn-text); border: 1px solid var(--cn-edge); border-radius: 4px; padding: 0 5px; }
   .cn-kind.p { color: #d6a6ea; border-color: #7a4a8e; }
   .cn-seg { display: inline-flex; border: 1px solid var(--cn-edge); border-radius: 99px; overflow: hidden; vertical-align: middle; }
@@ -1330,7 +1341,8 @@
       'Projects light up a breeding group on your den without touching your lore. A wolf keeps one bloodline and can join as many projects as you like.',
       'Borrowed a stud? Add him under Outside studs and his pups will show both parents’ lines.',
       'Very dark or very pale colours can vanish on Wolvden’s night or light mode. Canto warns you when you pick one.',
-      '“Only show lines while one is picked” keeps your den plain until you want to see a line.'],
+      '“Only show lines while one is picked” keeps your den plain until you want to see a line.',
+      'Wolves who have died keep their lines. Open your Pack Dynasty and Canto remembers them, in lilac with a small star.'],
     Tales: ['Your Tales also live in a box at the top of your den, with more room to read.',
       'Writing saves as you type, in this browser. Save your lore file now and then to keep a copy.',
       'Pictures come from links: Imgur, Discord, Toyhouse or a Wolvden image all work.',
@@ -1339,7 +1351,8 @@
     Calendar: ['Your pack’s seasons turn with Wolvden’s: every season lasts six real days.',
       'Prefer your years to follow a wolf? Count by its age instead. Visit it now and then so Canto can see how old it is.',
       'Events can be a whole season, early, mid or late in one, or a single day.',
-      'Started over? Your season names stay. You can change them in step 3.'],
+      'Started over? Your season names stay. You can change them in step 3.',
+      'Open your Pack Dynasty and your pack’s deaths join Important dates, each remembered on its anniversary.'],
     Files: ['Clearing your browser’s data clears Canto’s copy too. A saved file brings everything back.',
       'You can keep more than one pack. Switch between them at the top of Canto’s list.',
       'Your lore file is plain text: you can open it in Notepad, share it, or keep it in your own notes.'],
@@ -1527,6 +1540,12 @@
 
   let bloodEdit = null;
   const wolvesText = (n) => `${n} wol${n === 1 ? 'f' : 'ves'}`;
+  // "12 wolves · 3 remembered": the living, and those who have died (from the Pack Dynasty).
+  function lineCount(L, n) {
+    const dead = deadIds(L), ids = Object.entries(L.wolves).filter(([, w]) => key(w.line) === key(n) || projOf(w).some((p) => key(p) === key(n))).map(([id]) => id);
+    const gone = ids.filter((id) => dead.has(id)).length;
+    return wolvesText(ids.length - gone) + (gone && dynOpts().show ? ` · ${gone} remembered` : '');
+  }
   function countWolves(L, n) { return Object.values(L.wolves).filter((w) => key(w.line) === key(n) || projOf(w).some((p) => key(p) === key(n))).length; }
   function renameLine(L, from, to) {
     for (const w of Object.values(L.wolves)) {
@@ -1572,7 +1591,7 @@
       lines.append(h('div', { class: 'cn-row', style: 'cursor:pointer', title: 'Edit', onclick: () => { bloodEdit = l; render(); } },
         h('span', { class: 'cn-row l', style: 'padding:0' }, h('i', { class: 'cn-sw', style: 'background:' + l.c }), h('b', { class: 'cn-strong', text: l.n }),
           l.k === 'p' ? h('span', { class: 'cn-kind p', text: 'project' }) : l.k === 'bp' ? h('span', { class: 'cn-kind', text: 'bloodline + project' }) : null),
-        h('span', { class: 'cn-m' }, wolvesText(countWolves(L, l.n)), isBlood(l) ? [' · ', taleLink(L, l.n)] : null)));
+        h('span', { class: 'cn-m' }, lineCount(L, l.n), isBlood(l) ? [' · ', taleLink(L, l.n)] : null)));
     }
     if (bloodEdit === 'newLine') lines.append(lineForm(L, null));
     box.append(lines, h('div', { class: 'cn-btns' }, h('button', { class: 'cn-btn', type: 'button', text: 'Add a line', onclick: () => { bloodEdit = 'newLine'; render(); } })));
@@ -1586,7 +1605,7 @@
       if (bloodEdit === f) { fams.append(familyForm(L, f)); continue; }
       fams.append(h('div', { class: 'cn-row', style: 'cursor:pointer', title: 'Edit', onclick: () => { bloodEdit = f; render(); } },
         h('span', { class: 'cn-row l', style: 'padding:0' }, h('i', { class: 'cn-sw', style: 'background:' + ring(colours(L, f.n)) }), h('b', { class: 'cn-strong', text: f.n })),
-        h('span', { class: 'cn-m' }, `${f.a} + ${f.b} · ${wolvesText(countWolves(L, f.n))} · `, taleLink(L, f.n))));
+        h('span', { class: 'cn-m' }, `${f.a} + ${f.b} · ${lineCount(L, f.n)} · `, taleLink(L, f.n))));
     }
     for (const u of unnamedMeetings(L)) {
       const inp = h('input', { class: 'cn-in', placeholder: 'family name', style: 'width:130px' });
@@ -1866,17 +1885,26 @@
       onclick: () => { save('byLine', !open); render(); } })));
     if (!open) return;
     const link = (id, n) => h('a', { class: 'cn-go', href: '/wolf/' + id, text: n || '#' + id });
+    const dead = deadIds(L), showGone = dynOpts().show;
+    const didOf = Object.fromEntries(deadWolves(L).filter((x) => x.id).map((x) => [x.id, x.did]));
     const list = h('div', {});
     for (const x of [...L.lines, ...L.families]) {
       const blood = !lineOf(L, x.n) || isBlood(x), proj = lineOf(L, x.n) && isProj(x);
-      const ids = Object.entries(L.wolves).filter(([, w]) => (blood && key(w.line) === key(x.n)) || (proj && projOf(w).some((p) => key(p) === key(x.n))));
-      if (!ids.length) continue;
+      const all = Object.entries(L.wolves).filter(([, w]) => (blood && key(w.line) === key(x.n)) || (proj && projOf(w).some((p) => key(p) === key(x.n))));
+      // Wolves who have died follow the living, remembered, unless switched off.
+      const living = all.filter(([id]) => !dead.has(id)), gone = showGone ? all.filter(([id]) => dead.has(id)) : [];
+      if (!living.length && !gone.length) continue;
       list.append(h('div', { class: 'cn-row', style: 'padding-bottom:0' }, h('span', { class: 'cn-row l', style: 'padding:0' }, h('i', { class: 'cn-sw', style: 'background:' + ring(colours(L, x.n)) }),
-        h('b', { class: 'cn-strong', text: x.n }), lineOf(L, x.n) && x.k === 'p' ? h('span', { class: 'cn-kind p', text: 'project' }) : null), h('span', { class: 'cn-m', text: String(ids.length) })),
-      h('div', { class: 'cn-wl' }, ...ids.map(([id, w]) => link(id, w.n))));
+        h('b', { class: 'cn-strong', text: x.n }), lineOf(L, x.n) && x.k === 'p' ? h('span', { class: 'cn-kind p', text: 'project' }) : null), h('span', { class: 'cn-m', text: living.length + (gone.length ? ' + ' + gone.length : '') })),
+      h('div', { class: 'cn-wl' }, ...living.map(([id, w]) => link(id, w.n)), ...gone.map(([id, w]) => { const a = link(id, w.n); a.href = '/dynasty/wolf/' + didOf[id]; a.classList.add('gone'); a.title = 'Remembered'; return a; })));
     }
     if (!list.childNodes.length) list.append(h('div', { class: 'cn-m', text: 'No wolves in a line yet.' }));
     box.append(list);
+    if (dead.size) {
+      const i = h('input', { type: 'checkbox', checked: showGone });
+      i.addEventListener('change', () => { setDynOpt('show', i.checked); render(); });
+      box.append(h('label', { class: 'cn-row l', style: 'cursor:pointer' }, i, 'Show remembered wolves in their lines'));
+    }
     if (currentPage().kind === 'den' && denIsMine()) {
       const none = [...document.querySelectorAll('table[data-cave-key] .card a[href*="/wolf/"]')].map((a) => ({ id: (a.href.match(/wolf\/(\d+)/) || [])[1], n: (a.querySelector('small.b, .b') || a).textContent.trim() }))
         .filter((w, i, all) => w.id && all.findIndex((x) => x.id === w.id) === i && !(L.wolves[w.id] && (L.wolves[w.id].line || projOf(L.wolves[w.id]).length)));
@@ -2381,7 +2409,7 @@
 
   function renderCalendar(box, L, sub) {
     if (!calendarReady(L)) { renderSetup(box, L); return; }
-    const tag = (e) => h('span', { class: 'cn-etag t-' + typeOf(e), text: EVENT_TYPES[typeOf(e)] });
+    const tag = (e) => h('span', { class: 'cn-etag t-' + typeOf(e), text: e.remember ? 'in memory' : EVENT_TYPES[typeOf(e)] });
     if (sub === 'Overview') {
       box.append(wheel(L));
       if (L.cal.count === 'wolf' && yearOn(L, today()) == null) box.append(h('div', { class: 'cn-note', text: `Open wolf #${L.cal.wolf}’s page once so Canto can read its age and count the year.` }));
@@ -2415,6 +2443,20 @@
     if (calEdit === 'new') all.append(eventForm(L, null, g[2]));
     box.append(h('div', { class: 'cn-m', style: 'margin-bottom:4px', text: g[1].replace(/^\w/, (c) => c.toUpperCase()) + '.' }), all,
       h('div', { class: 'cn-btns' }, h('button', { class: 'cn-btn', type: 'button', text: 'Add an event', onclick: () => { calEdit = 'new'; render(); } })));
+    // Deaths from the Pack Dynasty sit with the important dates, apart from the ones you typed.
+    if (g[2].includes('death')) {
+      const o = dynOpts(), deaths = dynEvents(L).filter((e) => !e.remember);
+      box.append(h('div', { class: 'cn-lb', text: 'From the Dynasty' }));
+      if (o.cal) {
+        const dl = h('div', { class: 'cn-list' });
+        for (const e of deaths) dl.append(h('div', { class: 'cn-row' }, h('span', {}, h('b', { class: 'cn-strong', text: e.t }), h('br'),
+          h('span', { class: 'cn-m', text: whenText(L, { s: e.s, part: partOf(e.day), y: e.y }) + (e.lead ? ' · former leader' : ' · from the Dynasty') })), tag(e)));
+        if (!deaths.length) dl.append(h('div', { class: 'cn-m', text: 'Open your Pack Dynasty (the card at the top of your den) and Canto will add your pack’s deaths here.' }));
+        box.append(dl);
+      }
+      const tk = (k, label) => { const i = h('input', { type: 'checkbox', checked: !!o[k] }); i.addEventListener('change', () => { setDynOpt(k, i.checked); render(); }); return h('label', { class: 'cn-row l', style: 'cursor:pointer' }, i, label); };
+      box.append(tk('cal', 'Add deaths from the Dynasty here'), o.cal ? tk('yearly', 'Remember them each year, on the anniversary') : null);
+    }
   }
   function eventForm(L, e, types) {
     const t = h('input', { class: 'cn-in', value: e ? e.t : '', placeholder: 'what happens' });
@@ -2520,10 +2562,12 @@
   // ================================================================ the wolf's page
 
   let card = null;
-  function wolfCard(id) {
+  function wolfCard(id, did) {
     const L = lore();
     if (!L) return null;
     const name = pageName();
+    // A wolf who has died (seen through the Pack Dynasty) is shown as remembered, with its death.
+    const gone = did ? Object.assign({ did }, dynAll()[did]) : (() => { const e = Object.entries(dynAll()).find(([, d]) => d.id === id); return e ? Object.assign({ did: e[0] }, e[1]) : null; })();
     const w = L.wolves[id] || null;
     const parents = load('parents', {})[id];
     const box = h('div', { class: 'cn-b' });
@@ -2538,6 +2582,7 @@
     if (w && w.line && known(L, w.line)) {
       const told = L.tales.some((p) => key(p.t) === key(w.line) && p.md.trim());
       box.append(h('div', { class: 'cn-row' }, h('span', { class: 'cn-row l', style: 'padding:0' }, linePill(L, w.line),
+        gone ? h('span', { class: 'cn-mem' }, h('i'), 'remembered') : null,
         told ? h('button', { class: 'cn-a', type: 'button', text: `read ${w.line}’s tale`, style: 'color:#e8a24c', onclick: () => openTale(w.line) }) : null),
       h('span', { class: 'cn-row l', style: 'padding:0' }, h('span', { class: 'cn-m', text: 'change' }), sel)));
     } else box.append(h('div', { class: 'cn-row' }, h('span', { class: 'cn-m', text: w && w.line ? `“${w.line}” isn’t a line in this file` : 'Not in a line yet' }), sel));
@@ -2576,7 +2621,16 @@
       w && w.born ? [' ', h('span', { class: 'cn-chip', style: 'padding:0 6px;font-size:10.5px;cursor:default', text: 'lore' })] : counted ? h('span', { class: 'cn-m', text: ' · counted' }) : null),
     h('button', { class: 'cn-a', type: 'button', text: w && w.born ? 'change' : 'set the lore’s own', onclick: () => { row.replaceWith(bornForm(L, id, name, w)); } }));
     box.append(row);
-    const game = rowValue('Age');
+    if (gone) {
+      const dt = loreDateOf(L, gone.died);
+      const nice = gone.died ? new Date(gone.died + 'T12:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '';
+      box.append(h('div', { class: 'cn-lb', text: 'Died' }),
+        dt ? h('div', { class: 'cn-row' }, h('span', { text: whenText(L, { s: dt.s, part: dt.part, y: dt.y }) }), h('span', { class: 'cn-m', text: 'from the Dynasty · ' + nice }))
+          : h('div', { class: 'cn-m', text: 'Open your Pack Dynasty’s lists once and Canto will read the date.' }));
+      const by = w && w.born ? w.born.y : counted ? counted.y : null;
+      if (dt && dt.y != null && by != null) box.append(h('div', { class: 'cn-m', text: `Lived ${Math.max(0, dt.y - by)} year${dt.y - by === 1 ? '' : 's'} in your pack’s count` }));
+    }
+    const game = gone ? 'Elder' : rowValue('Age');
     if (w && w.born && counted) box.append(h('div', { class: 'cn-m', text: 'Wolvden’s count: ' + whenText(L, counted) }));
     // Names, for a pup
     if (!/adult|elder|senior/i.test(game) || /^new pup/i.test(name)) {
@@ -2629,6 +2683,81 @@
       } }), h('button', { class: 'cn-btn', type: 'button', text: 'Cancel', onclick: () => decoratePage() }),
       w && w.born ? h('button', { class: 'cn-btn', type: 'button', text: 'Let Canto count it', style: 'margin-left:auto', onclick: () => setWolf(L, id, name, { born: null }) }) : null));
   }
+  // ================================================================ the Pack Dynasty
+
+  /* Wolvden's record of the pack's wolves who have died. Its lists use a dynasty number; a dead
+     wolf's own page still links to its real wolf number. For your own pack only, Canto keeps each
+     one's name, death date, whether it led, and (once its page is seen) its real number: nothing else. */
+  const dynAll = () => load('dyn', {});
+  function dynSave(did, patch) { const all = dynAll(); all[did] = Object.assign(all[did] || {}, patch); save('dyn', all); }
+  const dynOpts = () => Object.assign({ cal: true, yearly: true, show: true }, load('dynOpts', {}));
+  function setDynOpt(k, v) { save('dynOpts', Object.assign(dynOpts(), { [k]: v })); }
+  // The dead, matched to wolves in the lore: sure once Canto has seen the real number, likely by name.
+  function deadWolves(L) {
+    const out = [];
+    for (const [did, d] of Object.entries(dynAll())) {
+      let id = d.id && L.wolves[d.id] ? d.id : null;
+      const sure = !!id;
+      if (!id && d.n) { const hit = Object.entries(L.wolves).find(([, w]) => w.n && key(w.n) === key(d.n)); if (hit) id = hit[0]; }
+      out.push({ did, id, sure, n: d.n || (id && L.wolves[id].n) || 'A wolf', died: d.died || '', lead: !!d.lead });
+    }
+    return out;
+  }
+  const deadIds = (L) => new Set(deadWolves(L).filter((x) => x.id).map((x) => x.id));
+  // A real date ("2026-02-22") in the pack's own seasons and years.
+  function loreDateOf(L, iso) {
+    const m = /^(\d{4})-(\d\d)-(\d\d)$/.exec(iso || '');
+    if (!m) return null;
+    const d = Date.UTC(+m[1], m[2] - 1, +m[3]) / 864e5;
+    const y = L.cal.count === 'seasons' && L.cal.start != null ? Math.floor((d - L.cal.start) / 24) + 1 : null;
+    return { s: seasonOnDay(d), part: partOf(dayInSeason(d)), day: dayInSeason(d), y };
+  }
+  // Deaths for the calendar, and a remembrance on each anniversary.
+  function dynEvents(L) {
+    const o = dynOpts();
+    if (!o.cal || !calendarReady(L)) return [];
+    const out = [];
+    for (const x of deadWolves(L)) {
+      const dt = loreDateOf(L, x.died);
+      if (!dt) continue;
+      if (dt.y != null) out.push({ id: 'dyn-' + x.did, dyn: true, t: `${x.n} died`, type: 'death', every: false, y: dt.y, s: dt.s, part: '', day: dt.day, lead: x.lead });
+      if (o.yearly) out.push({ id: 'dynr-' + x.did, dyn: true, remember: true, t: `Remembering ${x.n}`, type: 'death', every: true, y: null, notY: dt.y, s: dt.s, part: '', day: dt.day, lead: x.lead });
+    }
+    return out;
+  }
+  // The two Dynasty lists: Canto notes who died when, and adds a Line column.
+  function decorateDynList(page) {
+    if (!me().profile || me().profile !== page.owner) return;
+    for (const e of document.querySelectorAll('.cn-dcol')) e.remove();
+    const L = lore();
+    for (const table of document.querySelectorAll('#main table')) {
+      const rows = [...table.querySelectorAll('tr')].filter((r) => r.querySelector('a[href*="/dynasty/wolf/"]'));
+      if (!rows.length) continue;
+      const didOf = (r) => (r.querySelector('a[href*="/dynasty/wolf/"]').href.match(/dynasty\/wolf\/(\d+)/) || [])[1];
+      for (const r of rows) {
+        const cells = r.querySelectorAll('td'), did = didOf(r);
+        const died = ((cells[2] && cells[2].textContent.trim()) || '').match(/^\d{4}-\d\d-\d\d$/);
+        if (did) dynSave(did, { n: r.querySelector('a[href*="/dynasty/wolf/"]').textContent.trim(), died: died ? died[0] : (dynAll()[did] || {}).died || '', lead: page.leads });
+      }
+      if (!L) continue;
+      const th = table.querySelector('th[colspan]');
+      if (th) { th.dataset.cnSpan = th.dataset.cnSpan || th.colSpan; th.colSpan = +th.dataset.cnSpan + 1; }
+      const head = [...table.querySelectorAll('tr')].find((r) => r.querySelector('td.b'));
+      if (head) head.children[0].after(h('td', { class: 'b cn-dcol', text: 'Line' }));
+      const dead = deadWolves(L);
+      for (const r of rows) {
+        const x = dead.find((d) => d.did === didOf(r)), w = x && x.id ? L.wolves[x.id] : null;
+        const cell = h('td', { class: 'cn cn-dcol' });
+        if (w && w.line && known(L, w.line)) {
+          if (!x.sure) cell.append(h('span', { class: 'cn-qm', title: 'Matched by name. Open this wolf’s page once so Canto can be sure.', text: '?' }));
+          cell.append(linePill(L, w.line));
+        } else cell.append(h('span', { class: 'cn-m', text: w ? 'no line' : '' }));
+        r.children[0].after(cell);
+      }
+    }
+    if (!hub.hidden) render();
+  }
+
   function placeCard(c) {
     const lorePanel = document.getElementById('dk-lore');
     const tabs = document.querySelector('#main .tab-content');
@@ -2774,7 +2903,17 @@
     }
     if (page.kind === 'family') { card = familyCard(page.id); if (card) { const h1 = document.querySelector('#main .nav-tabs') || document.querySelector('#main h1'); if (h1) h1.after(card); } }
     if (page.kind === 'den') { decorateDen(); denTales(); }
-    const own = (page.kind === 'wolf' && wolfOwnedByMe()) || (page.kind === 'den' && denIsMine());
+    // A wolf of yours who has died: its dynasty page links to its real number, so the card follows it.
+    if (page.kind === 'dynwolf' && wolfOwnedByMe()) {
+      const fam = document.querySelector('#main a[href*="/family/"]');
+      const id = fam && (fam.href.match(/family\/(\d+)/) || [])[1];
+      if (id) {
+        dynSave(page.did, { id, n: pageName() || (dynAll()[page.did] || {}).n || '' });
+        if (L) { card = wolfCard(id, page.did); if (card) placeCard(card); }
+      }
+    }
+    if (page.kind === 'dynlist') decorateDynList(page);
+    const own = (page.kind === 'wolf' && wolfOwnedByMe()) || (page.kind === 'den' && denIsMine()) || (page.kind === 'dynwolf' && wolfOwnedByMe());
     if (own) markWords(document.getElementById('main'));
   }
 
