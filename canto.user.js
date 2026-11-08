@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canto
 // @namespace    fallowe.canto
-// @version      0.3.0
+// @version      0.4.0
 // @description  Canto hooks your pack's own lore into Wolvden: its words, its bloodlines, its calendar and its names. An add-on for Twill; Twill must be installed. It only reads the page you have open and never plays the game for you.
 // @author       Fallowe (Society of Fur)
 // @homepageURL  https://trashgremlinx.github.io/Canto/
@@ -23,7 +23,7 @@
   if (window.__canto) return;
   window.__canto = true;
 
-  const VERSION = '0.3.0';
+  const VERSION = '0.4.0';
   /* Versions work like Twill's: a new feature moves the middle number (0.2.0), an update the last
      (0.1.10), and a fix adds a hidden fourth (0.1.9.1) so Tampermonkey still updates. Players see
      three numbers; reports carry the full one. */
@@ -107,7 +107,7 @@
   }
 
   function emptyLore(name, keeper) {
-    return { name: name || 'My pack', keeper: keeper || '', words: [], lines: [], families: [], wolves: {}, studs: [], tales: [], taleCats: [], roles: [],
+    return { name: name || 'My pack', keeper: keeper || '', words: [], wordGroups: [], lines: [], families: [], wolves: {}, studs: [], tales: [], taleCats: [], roles: [],
       cal: { count: '', start: null, wolf: null, offset: 1, names: {}, events: [], show: { wheel: true, top: true } },
       names: [], extra: [] };
   }
@@ -166,6 +166,9 @@
         continue;
       }
       const l = bullet(raw);
+      // "Groups: Mystery, Greetings" names the player's own word groups
+      const gm = /^groups\s*:\s*(.+)$/i.exec(l);
+      if (gm && !raw.startsWith(' ')) { lore.wordGroups = gm[1].split(/,\s*/).map((x) => x.trim()).filter(Boolean); last = null; continue; }
       const i = l.indexOf(':');
       if (i < 1) continue;
       last = { w: l.slice(0, i).replace(/\*\*/g, '').trim(), meaning: l.slice(i + 1).trim(), say: '', kind: '', also: [] };
@@ -318,11 +321,31 @@
         }
         continue;
       }
-      m = /^([^:]+):\s*(.+)$/.exec(l);
+      m = /^([^:(]+):\s*(.+)$/.exec(l);
       const forLine = m ? m[1].trim() : '';
-      for (const n of (m ? m[2] : l).split(/,\s*/)) if (n.trim()) lore.names.push({ n: n.trim(), for: forLine, given: null });
+      // split on commas outside brackets
+      for (const n of (m ? m[2] : l).split(/,\s*(?![^()]*\))/)) {
+        const nm = /^(.+?)\s*(?:\(([^)]*)\))?$/.exec(n.trim());
+        if (!nm || !nm[1].trim()) continue;
+        lore.names.push(Object.assign({ n: nm[1].trim(), for: forLine, given: null }, nameTags(lore, nm[2] || '')));
+      }
     }
   }
+
+  // A name's tags: she / he / any, a season, a role, and "coat grey"
+  function nameTags(lore, text) {
+    const t = { sex: '', season: '', role: '', coat: '' };
+    for (const raw of text.split(/,\s*/).map((x) => x.trim()).filter(Boolean)) {
+      let m;
+      if (/^(she|he)$/i.test(raw)) t.sex = raw.toLowerCase();
+      else if (/^any$/i.test(raw)) continue;
+      else if ((m = /^coat\s+(.+)$/i.exec(raw))) t.coat = m[1].trim();
+      else if (seasonOf(lore, raw)) t.season = seasonOf(lore, raw);
+      else t.role = raw;
+    }
+    return t;
+  }
+  const nameTagText = (lore, n) => [n.sex, n.season && seasonName(lore, n.season), n.role, n.coat && 'coat ' + n.coat].filter(Boolean);
 
   // ---- writing it back
 
@@ -333,8 +356,8 @@
   }
   function sections(lore) {
     const out = {};
-    out.Language = lore.words.map((w) => `${oneLine(w.w)}: ${oneLine(w.meaning)}` + ((w.say || w.kind || w.also.length)
-      ? '\n  ' + [w.say && `Say: ${oneLine(w.say)}.`, w.kind && `Kind: ${oneLine(w.kind)}.`, w.also.length && `See also: ${w.also.map(oneLine).join(', ')}`].filter(Boolean).join(' ') : ''));
+    out.Language = ((lore.wordGroups || []).length ? [`Groups: ${lore.wordGroups.map(oneLine).join(', ')}`] : []).concat(lore.words.map((w) => `${oneLine(w.w)}: ${oneLine(w.meaning)}` + ((w.say || w.kind || w.also.length)
+      ? '\n  ' + [w.say && `Say: ${oneLine(w.say)}.`, w.kind && `Kind: ${oneLine(w.kind)}.`, w.also.length && `See also: ${w.also.map(oneLine).join(', ')}`].filter(Boolean).join(' ') : '')));
     out.Lines = lore.lines.filter((l) => l.k !== 'p').map((l) => `${l.n}: ${l.c}${l.meaning ? ', ' + l.meaning : ''}`);
     out.Projects = lore.lines.filter((l) => l.k === 'p' || l.k === 'bp').map((l) => (l.k === 'bp' ? l.n : `${l.n}: ${l.c}${l.meaning ? ', ' + l.meaning : ''}`));
     out.Families = lore.families.map((f) => `${f.a} + ${f.b} = ${f.n}${f.c ? ': ' + f.c : ''}`);
@@ -353,7 +376,7 @@
     out.Calendar = cl;
     const nl = [];
     const groups = {};
-    for (const n of lore.names.filter((x) => !x.given)) (groups[n.for || ''] = groups[n.for || ''] || []).push(n.n);
+    for (const n of lore.names.filter((x) => !x.given)) { const tg = nameTagText(lore, n).map(oneLine).join(', '); (groups[n.for || ''] = groups[n.for || ''] || []).push(n.n + (tg ? ` (${tg})` : '')); }
     for (const [g, ns] of Object.entries(groups)) nl.push((g ? g + ': ' : '') + ns.join(', '));
     const given = lore.names.filter((x) => x.given);
     if (given.length) nl.push('Given: ' + given.map((x) => x.n + (x.given.id ? ` (${x.given.id})` : '')).join(', '));
@@ -880,6 +903,30 @@
   .cn-etag.t-birth { background: #3d2a33; color: #e6a9c3; } .cn-etag.t-death { background: #2e2c33; color: #b9b3c9; }
   .cn-etag.t-anniversary { background: #3a3a22; color: #d9cf8a; }
   .cn-etag.t-wolfday { background: #2c3a2a; color: #b5d3a1; }
+  .cn-lk { border-bottom: 1.5px dotted #f0b48f; color: var(--cn-head); cursor: help; }
+  .cn-lk.k-wolf { border-bottom-color: #8fb4e6; }
+  .cn-lk.k-line { border-bottom-color: var(--lk, #e85c9a); }
+  .cn-lk:focus-visible { outline: 2px solid #6fa3b0; outline-offset: 1px; border-radius: 2px; }
+  .cn-lopts .cn-lk { cursor: default; }
+  .cn-lpop { position: fixed; z-index: 2147483600; background: #3a2f22; border: 1px solid #6b583f; border-radius: 8px; padding: 8px 10px; box-shadow: 0 8px 20px rgba(0,0,0,.45); font: 12.5px/1.5 var(--cn-body); color: var(--cn-text); }
+  .cn-lpop .cn-lph { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .cn-lpop .cn-lph b { font: 700 15px var(--cn-disp); color: var(--cn-head); }
+  .cn-lpop p { margin: 3px 0 5px; }
+  .cn-lpop .cn-dot { width: 10px; height: 10px; display: inline-block; border-radius: 50%; vertical-align: -1px; }
+  .cn-ntag { font-style: normal; font-weight: 400; font-size: 10.5px; color: var(--cn-soft); }
+  .cn-chip .cn-ntag { margin-left: 2px; }
+  .cn-sorts { flex-wrap: wrap; margin-bottom: 2px; }
+  .cn-nform { display: flex; flex-direction: column; align-items: stretch; gap: 5px; }
+  .cn-sky-note { background: rgba(111,163,176,.10); border-color: #3f5a60; color: #cfe3e8; }
+  .cn-grip { color: #7d6c55; font-size: 12px; letter-spacing: -2px; cursor: grab; width: 10px; flex: none; opacity: 0; }
+  .cn-tpg:hover .cn-grip, .cn-tfold:hover .cn-grip { opacity: 1; }
+  @media (hover: none) { .cn-grip { display: none; } }
+  .cn-dragging { opacity: .5; }
+  .cn-drop { box-shadow: inset 0 2px 0 var(--cn-ember); }
+  .cn-arw { display: inline-flex; gap: 2px; margin-left: 6px; flex: none; }
+  .cn-arw button { width: 22px; height: 22px; border: 1px solid var(--cn-edge); border-radius: 4px; background: var(--cn-raise); color: var(--cn-soft); font-size: 10px; cursor: pointer; padding: 0; }
+  .cn-arw button:disabled { opacity: .3; cursor: default; }
+  .cn-lopts { margin-top: 10px; border-top: 1px solid var(--cn-line); padding-top: 4px; }
   .cn-tmain .cn-read { margin-top: 0; border-top: 0; padding-top: 0; }
   .cn-tmain .cn-tbar { margin-top: 0; }
   .cn-tmain .cn-empty { margin-top: 0; border-top: 0; }
@@ -991,14 +1038,20 @@
     rec.given = null;
     commit();
   }
-  // The names to offer a wolf: those for its line, or its family's lines, first; then the open list.
-  function namesFor(L, id) {
+  /* The names to offer a wolf, best fits first: its line (or its family's lines), then its sex,
+     the season it was born in and its coat. Names for the other sex are left out unless "all". */
+  function namesFor(L, id, all) {
     const w = L.wolves[id] || {};
     const parents = load('parents', {})[id];
     const fam = w.line ? famOf(L, w.line) : null;
     const pref = new Set([w.line, fam && fam.a, fam && fam.b, ...(parents ? [lineOfWolf(L, parents.m), lineOfWolf(L, parents.f)] : [])].filter(Boolean).map(key));
-    const open = L.names.filter((x) => !x.given);
-    return [...open.filter((x) => x.for && pref.has(key(x.for))), ...open.filter((x) => !x.for), ...open.filter((x) => x.for && !pref.has(key(x.for)))];
+    const sx = rowValue('Sex'), sex = /^female/i.test(sx) ? 'she' : /^male/i.test(sx) ? 'he' : '';
+    const season = (w.born && w.born.s) || ((countedBirth(L, id) || {}).s) || seasonOnDay(today());
+    const base = key(rowValue('Base'));
+    const score = (x) => (x.for ? (pref.has(key(x.for)) ? 20 : 0) : 10) + (x.sex && x.sex === sex ? 2 : 0)
+      + (x.season ? (x.season === season ? 3 : -3) : 0) + (x.coat ? (base && base.includes(key(x.coat)) ? 3 : -2) : 0);
+    const open = L.names.filter((x) => !x.given && (all || !sex || !x.sex || x.sex === sex));
+    return open.map((x, i) => ({ x, s: score(x), i })).sort((a, b) => b.s - a.s || a.i - b.i).map((o) => o.x);
   }
   const studById = (L, id) => (id && L.studs.find((s) => s.id === id)) || null;
   const lineOfWolf = (L, id) => (id ? (L.wolves[id] && L.wolves[id].line) || (studById(L, id) || {}).line || '' : '');
@@ -1007,10 +1060,13 @@
     const done = () => { if (el) { const was = el.textContent; el.textContent = 'copied'; setTimeout(() => { el.textContent = was; }, 900); } };
     try { navigator.clipboard.writeText(text).then(done, done); } catch { done(); }
   }
+  let namesAll = false;
   function nameChips(L, id, n = 3) {
-    return h('span', { class: 'cn-chips' }, ...namesFor(L, id).slice(0, n).map((x) => {
-      const c = h('span', { class: 'cn-chip', title: 'Copy ' + x.n, text: x.n });
-      c.addEventListener('click', () => copy(x.n, c));
+    return h('span', { class: 'cn-chips' }, ...namesFor(L, id, namesAll).slice(0, namesAll ? 99 : n).map((x) => {
+      const tg = [x.for, ...nameTagText(L, x)].filter(Boolean).join(' · ');
+      const nm = h('span', { text: x.n });
+      const c = h('span', { class: 'cn-chip', title: 'Copy ' + x.n }, nm, tg ? h('i', { class: 'cn-ntag', text: tg }) : null);
+      c.addEventListener('click', () => copy(x.n, nm));
       return c;
     }));
   }
@@ -1272,7 +1328,11 @@
     ['Songs', 'songs, howls, chants', ['song', 'howl', 'chant', 'verse', 'poem', 'hymn', 'lullaby'], 'song'],
   ];
   const ALL_WORDS = 'All words', OTHER = 'Other';
+  const ownGroups = () => { const L = lore(); return (L && L.wordGroups) || []; };
+  const kindKey = (k) => key(k).replace(/s$/, '');
   function kindGroup(kind) {
+    const own = ownGroups().find((g) => kind && kindKey(g) === kindKey(kind));
+    if (own) return own;
     const ws = key(kind).split(' ').filter(Boolean);
     const g = LANG_GROUPS.find(([, , kw]) => ws.some((w) => kw.includes(w) || kw.includes(w.replace(/s$/, ''))));
     return g ? g[0] : OTHER;
@@ -1285,7 +1345,7 @@
   const typeOf = (e) => (EVENT_TYPES[e.type] ? e.type : 'other');
   const BLOOD_PARTS = ['Lines & families', 'Roles', 'Names', 'Den look'];
   function subsOf(sec, L) {
-    if (sec === 'Language') return [ALL_WORDS, ...LANG_GROUPS.map((g) => g[0]).filter((g) => L.words.some((w) => kindGroup(w.kind) === g)), ...(L.words.some((w) => kindGroup(w.kind) === OTHER) ? [OTHER] : [])];
+    if (sec === 'Language') return [ALL_WORDS, ...LANG_GROUPS.map((g) => g[0]).filter((g) => L.words.some((w) => kindGroup(w.kind) === g)), ...(L.wordGroups || []), ...(L.words.some((w) => kindGroup(w.kind) === OTHER) ? [OTHER] : [])];
     if (sec === 'Bloodlines') return BLOOD_PARTS;
     if (sec === 'Calendar') return calendarReady(L) ? ['Overview', ...EVENT_GROUPS.map((g) => g[0])] : null;
     if (sec === 'Tales') return taleAll(L);
@@ -1300,13 +1360,13 @@
         n != null ? h('span', { class: 'cn-n', text: String(n) }) : null, h('span', { class: 'cn-chev', 'aria-hidden': 'true', text: '›' })));
     }
     box.append(list);
-    if (sec === 'Language') box.append(h('div', { class: 'cn-m', style: 'margin-top:8px', text: 'Words are grouped by their Kind. Groups with no words yet stay hidden.' }));
+    if (sec === 'Language') box.append(h('div', { class: 'cn-m', style: 'margin-top:8px', text: 'Words are grouped by their Kind. Groups with no words yet stay hidden. Your own groups can be renamed or folded back into Other.' }));
   }
   function subSummary(L, sec, p) {
     if (sec === 'Language') {
       if (p === ALL_WORDS) return ['search everything', L.words.length];
       const g = LANG_GROUPS.find((x) => x[0] === p);
-      return [g ? g[1] : 'anything without a kind yet', L.words.filter((w) => kindGroup(w.kind) === p).length];
+      return [g ? g[1] : (L.wordGroups || []).includes(p) ? 'your own group' : 'anything without a kind yet', L.words.filter((w) => kindGroup(w.kind) === p).length];
     }
     if (sec === 'Bloodlines') {
       if (p === 'Lines & families') {
@@ -1364,8 +1424,9 @@
     { id: 'calendar', at: 'Calendar', title: 'Getting started with the Calendar', steps: [
       { id: 'c1', t: 'Set up your calendar.', d: 'Three short steps: how years count, when Year 1 began, and your season names.', auto: (L) => calendarReady(L) },
       { id: 'c2', t: 'Add an event.', d: 'A festival every year, or something that happened once.', auto: (L) => L && L.cal.events.length },
-      { id: 'c3', t: 'Give a wolf a lore birth.', d: 'On a wolf’s card, set when it was born in your pack’s years, or let Canto count it.', auto: (L) => L && Object.values(L.wolves).some((w) => w.born) },
-      { id: 'c4', t: 'See what’s coming.', d: 'Your next event shows at the top of Canto and on the wheel.' }] },
+      { id: 'c3', t: 'Give a wolf a lore birth.', d: 'On a wolf’s card, set when it was born in your pack’s years. Its birthday then shows on the calendar.', auto: (L) => L && Object.values(L.wolves).some((w) => w.born) },
+      { id: 'c4', t: 'See what’s coming.', d: 'Your next event shows at the top of Canto and on the wheel.' },
+      { id: 'c5', t: 'Keep a wolf day.', d: 'On a wolf’s card, add a day from its life: a first litter, a new role, a scar.', auto: (L) => L && Object.values(L.wolves).some((w) => (w.days || []).length) }] },
     { id: 'files', at: 'Files', title: 'Getting started with Files', steps: [
       { id: 'f1', t: 'Save your lore file.', d: 'Canto keeps your lore in this browser, so save a copy you can keep.', auto: () => tut.ev.saved },
       { id: 'f2', t: 'Try “Copy what changed”.', d: 'It gives just your new lines, to paste into a file you keep elsewhere.', auto: () => tut.ev.copied },
@@ -1387,12 +1448,17 @@
       'Writing saves as you type, in this browser. Save your lore file now and then to keep a copy.',
       'Pictures come from links: Imgur, Discord, Toyhouse or a Wolvden image all work.',
       'Add your own pages for anything: a place, a legend, a war, a wedding.',
-      'Stuck on a bloodline? Its nudge questions are about that line in particular.'],
+      'Stuck on a bloodline? Its nudge questions are about that line in particular.',
+      'Words, wolves and lines from your lore are dotted in your tales. Hover one, or tap it on a phone, to see its card.'],
     Calendar: ['Your pack’s seasons turn with Wolvden’s: every season lasts six real days.',
       'Prefer your years to follow a wolf? Count by its age instead. Visit it now and then so Canto can see how old it is.',
       'Events can be a whole season, early, mid or late in one, or a single day.',
       'Started over? Your season names stay. You can change them in step 3.',
-      'Open your Pack Dynasty and your pack’s deaths join Important dates, each remembered on its anniversary.'],
+      'Open your Pack Dynasty and your pack’s deaths join Important dates, each remembered on its anniversary.',
+      'The Overview shows the wheel and everything in the next 10 days. The row along the top opens each group of events.',
+      'Give a wolf a lore birth and its birthday joins Important dates by itself, with the age it turns.',
+      'Keep a wolf’s big days, like a first litter or a new role, as wolf days on its Canto card. Tick “every year” to see them come round again.',
+      'Pink marks on the wheel are birthdays. Green ones are wolf days.'],
     Files: ['Clearing your browser’s data clears Canto’s copy too. A saved file brings everything back.',
       'You can keep more than one pack. Switch between them at the top of Canto’s list.',
       'Your lore file is plain text: you can open it in Notepad, share it, or keep it in your own notes.'],
@@ -1544,8 +1610,37 @@
     q.addEventListener('input', () => { langQuery = q.value; drawList(); });
     box.append(h('div', { class: 'cn-row', style: 'padding:0 0 6px' }, q,
       h('button', { class: 'cn-btn', type: 'button', text: 'Add', onclick: () => { langEdit = 'new'; render(); } })));
+    const own = (L.wordGroups || []).includes(group);
     // Adding from inside a group gives the word that group's kind.
-    if (langEdit === 'new') box.append(wordForm(L, null, g ? g[3] : ''));
+    if (langEdit === 'new') box.append(wordForm(L, null, g ? g[3] : own ? group.toLowerCase() : ''));
+    // Three or more words of a kind Canto doesn't know: offer them a group of their own.
+    if (group === OTHER) {
+      const counts = {};
+      for (const w of L.words) if (w.kind && kindGroup(w.kind) === OTHER) { const k = kindKey(w.kind); (counts[k] = counts[k] || { n: 0, kind: w.kind.trim() }).n++; }
+      const skip = load('groupSkip', {});
+      const best = Object.entries(counts).filter(([k, c]) => c.n >= 3 && !(skip[k] >= c.n)).sort((a, b) => b[1].n - a[1].n)[0];
+      if (best) {
+        const [k, c] = best, nm = c.kind.replace(/^\p{L}/u, (x) => x.toUpperCase());
+        box.append(h('div', { class: 'cn-note cn-sky-note' }, h('b', { text: `${c.n} words are “${c.kind}”.` }), ` Give them a group of their own, next to Nouns and Verbs? `,
+          h('button', { class: 'cn-btn cn-sky', type: 'button', text: `Make a ${nm} group`, onclick: () => {
+            L.wordGroups = (L.wordGroups || []).concat(nm); subs.Language = nm; save('subs', subs); changed();
+          } }), ' ',
+          h('button', { class: 'cn-a', type: 'button', text: 'not now', onclick: () => { skip[k] = c.n; save('groupSkip', skip); render(); } })));
+      }
+    }
+    if (own) box.append(h('div', { class: 'cn-m', style: 'margin:-2px 0 6px' }, 'Your own group. ',
+      h('button', { class: 'cn-a', type: 'button', text: 'rename', onclick: () => {
+        const to = oneLine(prompt(`Rename the group “${group}” to:`, group) || '');
+        if (!to || to === group || (L.wordGroups || []).some((x) => key(x) === key(to))) return;
+        for (const w of L.words) if (w.kind && kindKey(w.kind) === kindKey(group)) w.kind = to.toLowerCase();
+        L.wordGroups[L.wordGroups.indexOf(group)] = to; subs.Language = to; save('subs', subs); changed();
+      } }), ' · ',
+      h('button', { class: 'cn-a', type: 'button', text: 'fold back into Other', onclick: () => {
+        if (!confirm(`Fold “${group}” back into Other? Its words keep their kind.`)) return;
+        L.wordGroups.splice(L.wordGroups.indexOf(group), 1);
+        const skip = load('groupSkip', {}); skip[kindKey(group)] = L.words.filter((w) => w.kind && kindKey(w.kind) === kindKey(group)).length; save('groupSkip', skip);
+        subs.Language = OTHER; save('subs', subs); changed();
+      } })));
     const list = h('div', { class: 'cn-list' });
     const shown = L.words.filter((w) => inGroup(w, group)).length;
     box.append(list, h('div', { class: 'cn-m', style: 'margin-top:8px', text: `${shown} word${shown === 1 ? '' : 's'} · marked on your own pages only` }));
@@ -1708,31 +1803,57 @@
         h('div', { class: 'cn-wl', style: 'padding-left:0' }, ...ws.map(([id, w]) => h('a', { class: 'cn-go', href: '/wolf/' + id, text: w.n || '#' + id }))));
     }
   }
+  let nameSort = 'All', nameSex = '';
   function renderNames(box, L) {
-    box.append(h('div', { class: 'cn-lb', text: 'Names for pups' }));
+    const SORTS = { All: (n) => n.for || 'Any line', 'She / he': (n) => ({ she: 'She', he: 'He' })[n.sex] || 'Any', Season: (n) => (n.season ? seasonName(L, n.season) : 'Any season'),
+      Role: (n) => n.role || 'Any role', Coat: (n) => (n.coat ? cap(n.coat) : 'Any coat') };
+    box.append(h('div', { class: 'cn-lb', text: 'Sort by' }), h('div', { class: 'cn-seg cn-sorts' }, ...Object.keys(SORTS).map((k) =>
+      h('button', { type: 'button', class: k === nameSort ? 'on' : '', text: k, onclick: () => { nameSort = k; render(); } }))));
     const groups = new Map();
-    for (const n of L.names) { const g = n.for || ''; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(n); }
-    for (const [g, ns] of groups) {
-      const row = h('div', { class: 'cn-row l' }, h('span', { class: 'cn-m', style: 'min-width:56px', text: g || 'Any' }));
+    for (const n of L.names) { const g = SORTS[nameSort](n); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(n); }
+    for (const [g, ns] of [...groups].sort((a, b) => /^Any/.test(a[0]) - /^Any/.test(b[0]))) {
+      box.append(h('div', { class: 'cn-lb', text: g }));
+      const row = h('div', { class: 'cn-chips', style: 'flex-wrap:wrap' });
       for (const n of ns) {
-        const chip = h('span', { class: 'cn-chip' + (n.given ? ' given' : ''), text: n.n,
-          title: n.given ? `Given${n.given.id ? ' to wolf #' + n.given.id : ''}. Tap to put it back.` : 'Tap to copy. Double-tap to remove.' });
+        const tg = [nameSort !== 'All' && n.for, ...nameTagText(L, n)].filter(Boolean).join(' · ');
+        const nm = h('span', { text: n.n });
+        const chip = h('span', { class: 'cn-chip' + (n.given ? ' given' : ''),
+          title: n.given ? `Given${n.given.id ? ' to wolf #' + n.given.id : ''}. Tap to put it back.` : 'Tap to copy. Double-tap to remove.' }, nm, tg ? h('i', { class: 'cn-ntag', text: tg }) : null);
         if (n.given) chip.addEventListener('click', () => { undoGiven(n); render(); });
         else {
-          chip.addEventListener('click', () => copy(n.n, chip));
+          chip.addEventListener('click', () => copy(n.n, nm));
           chip.addEventListener('dblclick', () => { L.names.splice(L.names.indexOf(n), 1); changed(); });
         }
         row.append(chip);
       }
       box.append(row);
     }
+    if (!L.names.length) box.append(h('div', { class: 'cn-m', text: 'No names saved yet.' }));
+    // Adding: everything but the name is optional. A name you already have gets the new tags.
     const nn = h('input', { class: 'cn-in', placeholder: 'a name, or several', style: 'flex:1' });
-    const nf = h('select', { class: 'cn-in' }, h('option', { value: '', text: 'any line' }),
-      ...bloodOpts(L).map((x) => h('option', { value: x.n, text: x.n })));
-    box.append(h('div', { class: 'cn-row', style: 'margin-top:4px' }, nn, nf, h('button', { class: 'cn-btn', type: 'button', text: 'Add', onclick: () => {
-      for (const n of nn.value.split(/,\s*/).map((x) => x.trim()).filter(Boolean)) L.names.push({ n, for: nf.value, given: null });
-      changed();
-    } })), h('div', { class: 'cn-m', text: 'Tap a name to copy it; a given name is struck through, tap it to put it back.' }));
+    const nf = h('select', { class: 'cn-in' }, h('option', { value: '', text: 'any line' }), ...bloodOpts(L).map((x) => h('option', { value: x.n, text: x.n })));
+    const sexSeg = h('span', { class: 'cn-seg' }, ...[['she', 'she'], ['he', 'he'], ['', 'any']].map(([v, t]) =>
+      h('button', { type: 'button', class: nameSex === v ? 'on' : '', text: t, onclick: () => { nameSex = v; for (const b of sexSeg.children) b.classList.toggle('on', b.textContent === t); } })));
+    const ns = h('select', { class: 'cn-in' }, h('option', { value: '', text: 'any' }), ...SEASONS.map((x) => h('option', { value: x, text: seasonName(L, x) })));
+    const nr = h('select', { class: 'cn-in' }, h('option', { value: '', text: 'any' }), ...L.roles.map((r) => h('option', { value: r, text: r })));
+    const nc = h('input', { class: 'cn-in', placeholder: 'any, or type one: grey, cream…', style: 'flex:1' });
+    const lab = (t) => h('span', { class: 'cn-m', style: 'width:52px', text: t });
+    box.append(h('div', { class: 'cn-form cn-nform' },
+      h('div', { class: 'cn-row', style: 'padding:0' }, nn, nf),
+      h('div', { class: 'cn-row l', style: 'padding:0' }, lab('For'), sexSeg),
+      h('div', { class: 'cn-row l', style: 'padding:0' }, lab('Season'), ns),
+      h('div', { class: 'cn-row l', style: 'padding:0' }, lab('Role'), nr, L.roles.length ? null : h('span', { class: 'cn-m', text: 'add roles under Roles' })),
+      h('div', { class: 'cn-row l', style: 'padding:0' }, lab('Coat'), nc),
+      h('div', { class: 'cn-btns' }, h('button', { class: 'cn-btn on', type: 'button', text: 'Save', onclick: () => {
+        const tags = { sex: nameSex, season: ns.value, role: nr.value, coat: oneLine(nc.value).replace(/[(),]/g, ' ').trim() };
+        for (const n of nn.value.split(/,\s*/).map((x) => oneLine(x).replace(/[()]/g, '')).filter(Boolean)) {
+          const had = L.names.find((x) => !x.given && key(x.n) === key(n));
+          if (had) Object.assign(had, tags, nf.value ? { for: nf.value } : {});
+          else L.names.push(Object.assign({ n, for: nf.value, given: null }, tags));
+        }
+        changed();
+      } }), h('span', { class: 'cn-m', text: 'Everything but the name is optional. A name you already have takes the new tags.' }))),
+      h('div', { class: 'cn-m', text: 'Tap a name to copy it, double-tap to remove it. A given name is struck through: tap it to put it back.' }));
   }
   function studForm(L, s) {
     const n = h('input', { class: 'cn-in', value: s ? s.n : '' });
@@ -2104,23 +2225,75 @@
   function flushTale() { if (taleEdit && taleEdit.flush) taleEdit.flush(); }
 
   // The folder tree: pages to open, folders that fold, and ways to add both.
-  let taleNewFolder = false;
+  let taleNewFolder = false, taleOrder = false, taleDrag = null;
+  // Move one of your own pages before another (or to the end of a folder), or a folder before another.
+  function movePage(L, t, beforeT, cat) {
+    const p = taleOf(L, t); if (!p) return;
+    L.tales.splice(L.tales.indexOf(p), 1);
+    if (cat !== undefined) p.cat = cat;
+    const b = beforeT ? taleOf(L, beforeT) : null;
+    if (b) L.tales.splice(L.tales.indexOf(b), 0, p); else L.tales.push(p);
+    commit(); refreshTales();
+  }
+  function moveFolder(L, name, before) {
+    const i = L.taleCats.indexOf(name); if (i < 0) return;
+    L.taleCats.splice(i, 1);
+    const j = before ? L.taleCats.indexOf(before) : -1;
+    if (j < 0) L.taleCats.push(name); else L.taleCats.splice(j, 0, name);
+    commit(); refreshTales();
+  }
+  // Your own pages in one folder, in order: not the pack's page, not a line's page
+  const ownSibs = (L, cat) => L.tales.filter((x) => (x.cat || '') === (cat || '') && key(x.t) !== key(PACK_PAGE) && !bloodOpts(L).some((b) => key(b.n) === key(x.t)));
+  function stepPage(L, t, d) {
+    const p = taleOf(L, t); const sib = ownSibs(L, p.cat);
+    const i = sib.indexOf(p), o = sib[i + d]; if (!o) return;
+    const a = L.tales.indexOf(p), b = L.tales.indexOf(o);
+    L.tales[a] = o; L.tales[b] = p; commit(); refreshTales();
+  }
+  function stepFolder(L, name, d) {
+    const i = L.taleCats.indexOf(name), j = i + d; if (j < 0 || j >= L.taleCats.length) return;
+    [L.taleCats[i], L.taleCats[j]] = [L.taleCats[j], L.taleCats[i]]; commit(); refreshTales();
+  }
   function taleTree(L, where, pick) {
     const pages = talePages(L), open = load('taleOpen', {});
     const tree = h('div', { class: 'cn-tree2' + (where === 'den' ? ' side' : '') });
     const words = (t) => { const p = taleOf(L, t); return p && p.md.trim() ? (p.md.match(/[\p{L}\p{N}’']+/gu) || []).length : 0; };
+    const arrows = (up, down) => h('span', { class: 'cn-arw' },
+      h('button', { type: 'button', 'aria-label': 'Move up', text: '▲', disabled: !up, onclick: (e) => { e.stopPropagation(); up(); } }),
+      h('button', { type: 'button', 'aria-label': 'Move down', text: '▼', disabled: !down, onclick: (e) => { e.stopPropagation(); down(); } }));
+    // Your own pages and folders can be dragged (on a computer) or moved with arrows (after "reorder").
+    const dragOver = (el, ok, drop) => {
+      el.addEventListener('dragover', (e) => { if (taleDrag && ok()) { e.preventDefault(); el.classList.add('cn-drop'); } });
+      el.addEventListener('dragleave', () => el.classList.remove('cn-drop'));
+      el.addEventListener('drop', (e) => { el.classList.remove('cn-drop'); if (taleDrag && ok()) { e.preventDefault(); drop(); taleDrag = null; } });
+    };
     const pageRow = (p, inFolder) => {
-      const n = words(p.t), here = where === 'den' && key(p.t) === key(taleSel);
-      return h('button', { type: 'button', class: 'cn-tpg' + (inFolder ? ' in' : '') + (n || p.kind === 'pack' ? '' : ' empty') + (here ? ' on' : ''), onclick: () => pick(p.t) },
-        p.kind === 'line' ? dot(L, p.t) : null, h('span', { class: 'cn-tt', text: p.t }), h('span', { class: 'cn-m', text: n ? `${n} word${n === 1 ? '' : 's'}` : p.kind === 'pack' ? '' : 'not yet' }));
+      const n = words(p.t), here = where === 'den' && key(p.t) === key(taleSel), own = p.kind === 'own' && !!taleOf(L, p.t);
+      const sib = own ? ownSibs(L, taleOf(L, p.t).cat) : [];
+      const at = own ? sib.indexOf(taleOf(L, p.t)) : -1;
+      const row = h('div', { role: 'button', tabindex: '0', class: 'cn-tpg' + (inFolder ? ' in' : '') + (n || p.kind === 'pack' ? '' : ' empty') + (here ? ' on' : ''), onclick: () => pick(p.t),
+        onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(p.t); } } },
+        own ? h('span', { class: 'cn-grip', 'aria-hidden': 'true', text: '⋮⋮' }) : null,
+        p.kind === 'line' ? dot(L, p.t) : null, h('span', { class: 'cn-tt', text: p.t }), h('span', { class: 'cn-m', text: n ? `${n} word${n === 1 ? '' : 's'}` : p.kind === 'pack' ? '' : 'not yet' }),
+        own && taleOrder ? arrows(at > 0 && (() => stepPage(L, p.t, -1)), at < sib.length - 1 && (() => stepPage(L, p.t, 1))) : null);
+      if (own) {
+        row.draggable = true;
+        row.addEventListener('dragstart', (e) => { taleDrag = { page: p.t }; e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', p.t); } catch {} row.classList.add('cn-dragging'); });
+        row.addEventListener('dragend', () => { row.classList.remove('cn-dragging'); taleDrag = null; });
+        dragOver(row, () => taleDrag.page && key(taleDrag.page) !== key(p.t), () => movePage(L, taleDrag.page, p.t, taleOf(L, p.t).cat));
+      }
+      return row;
     };
     const folder = (name, own) => {
       const ps = pages.filter((p) => p.cat === name), isOpen = open[name] !== false;
       const done = ps.filter((p) => words(p.t)).length;
+      const fi = L.taleCats.indexOf(name);
       const headRow = h('div', { class: 'cn-tfold' },
+        own ? h('span', { class: 'cn-grip', 'aria-hidden': 'true', text: '⋮⋮' }) : null,
         h('button', { type: 'button', class: 'cn-tfh', 'aria-expanded': String(isOpen), onclick: () => { open[name] = !isOpen; save('taleOpen', open); refreshTales(); } },
           h('span', { class: 'cn-caret', text: isOpen ? '▾' : '▸' }), h('b', { text: name }),
           h('span', { class: 'cn-m', text: name === LINE_FOLDER ? `${done} written` : `${ps.length} page${ps.length === 1 ? '' : 's'}` })),
+        own && taleOrder ? arrows(fi > 0 && (() => stepFolder(L, name, -1)), fi < L.taleCats.length - 1 && (() => stepFolder(L, name, 1))) : null,
         own && isOpen ? h('span', { class: 'cn-tfa' },
           h('button', { class: 'cn-a', type: 'button', text: 'rename', onclick: () => {
             const to = (prompt(`Rename the folder “${name}” to:`, name) || '').trim();
@@ -2135,9 +2308,16 @@
             for (const p of L.tales) if (p.cat === name) p.cat = '';
             commit(); refreshTales();
           } })) : null);
+      if (own) {
+        headRow.draggable = true;
+        headRow.addEventListener('dragstart', (e) => { taleDrag = { folder: name }; e.dataTransfer.effectAllowed = 'move'; try { e.dataTransfer.setData('text/plain', name); } catch {} headRow.classList.add('cn-dragging'); });
+        headRow.addEventListener('dragend', () => { headRow.classList.remove('cn-dragging'); taleDrag = null; });
+        // a folder dropped here goes before it; a page dropped here goes to the end of it
+        dragOver(headRow, () => (taleDrag.folder && taleDrag.folder !== name) || !!taleDrag.page, () => (taleDrag.folder ? moveFolder(L, taleDrag.folder, name) : movePage(L, taleDrag.page, null, name)));
+      }
       tree.append(headRow);
       if (isOpen) for (const p of ps) tree.append(pageRow(p, true));
-      if (isOpen && !ps.length) tree.append(h('div', { class: 'cn-m', style: 'padding:4px 0 6px 24px', text: 'Empty. Move a page here from the page itself.' }));
+      if (isOpen && !ps.length) tree.append(h('div', { class: 'cn-m', style: 'padding:4px 0 6px 24px', text: 'Empty. Drag a page here, or move one from the page itself.' }));
     };
     for (const p of pages.filter((x) => !x.cat)) tree.append(pageRow(p, false));
     if (pages.some((p) => p.cat === LINE_FOLDER)) folder(LINE_FOLDER, false);
@@ -2162,9 +2342,13 @@
       adder.append(h('button', { class: 'cn-btn cn-dash', type: 'button', text: '+ new folder', onclick: () => { flushTale(); taleNewFolder = true; refreshTales(); } }),
         h('button', { class: 'cn-btn cn-dash', type: 'button', text: '+ new page', onclick: () => { flushTale(); taleNew = true; refreshTales(); } }));
     }
+    if (L.tales.some((p) => key(p.t) !== key(PACK_PAGE) && !bloodOpts(L).some((x) => key(x.n) === key(p.t))) || L.taleCats.length > 1)
+      adder.append(h('button', { class: 'cn-btn cn-dash' + (taleOrder ? ' on' : ''), type: 'button', text: taleOrder ? 'done reordering' : 'reorder',
+        title: 'Move your own pages and folders up and down. On a computer you can also drag them by the ⋮⋮.', onclick: () => { taleOrder = !taleOrder; refreshTales(); } }));
     const allTick = h('input', { type: 'checkbox', checked: load('talesAll', true) });
     allTick.addEventListener('change', () => { save('talesAll', allTick.checked); refreshTales(); });
     tree.append(adder, h('label', { class: 'cn-m', style: 'cursor:pointer;margin-top:8px;display:flex;gap:6px;align-items:flex-start' }, allTick, h('span', { text: 'a page for every line, even before it’s written' })));
+    if (where === 'hub') tree.append(linkOptsBox());
     return tree;
   }
 
@@ -2189,6 +2373,7 @@
       if (page.md.trim()) {
         const read = h('div', { class: 'cn-read' });
         read.innerHTML = `<h3>${escH(page.t)}</h3>` + mdToHtml(page.md);
+        linkLore(read, L);
         for (const f of read.querySelectorAll('figure')) f.addEventListener('click', () => f.classList.toggle('big'));
         main.append(read, h('div', { class: 'cn-btns' }, h('button', { class: 'cn-btn on', type: 'button', text: 'Edit', onclick: () => startEdit(where) }),
           h('button', { class: 'cn-btn', type: 'button', text: '✦ nudge', style: 'border-color:var(--cn-ember);color:#f0b48f', onclick: () => { taleNudge = !taleNudge; refreshTales(); } }),
@@ -2211,6 +2396,101 @@
     if (wide) box.append(h('div', { class: 'cn-twide' }, taleTree(L, where, pickDen), main));
     else box.append(main);
   }
+
+  /* Linked words: while a tale is read, words from Language, wolves and lines are dotted, and
+     hovering (or tapping) one shows its card. Only words marked [[like this]] when "only words I
+     mark" is on. Never in the writing box, never inside headings. */
+  const LINK_DEFAULT = { words: true, wolves: true, lines: true, first: false, marked: false };
+  const linkOpts = () => Object.assign({}, LINK_DEFAULT, load('taleLinks', {}));
+  function linkOptsBox() {
+    const o = linkOpts();
+    const tk = (k, label, cls) => { const i = h('input', { type: 'checkbox', checked: !!o[k] }); i.addEventListener('change', () => { save('taleLinks', Object.assign(linkOpts(), { [k]: i.checked })); refreshTales(); });
+      return h('label', { class: 'cn-row l', style: 'cursor:pointer;padding:2px 0' }, i, cls ? h('span', {}, h('span', { class: 'cn-lk ' + cls, text: label[0] }), label[1]) : label); };
+    return h('div', { class: 'cn-lopts' }, h('div', { class: 'cn-lb', text: 'Link in your tales' }),
+      tk('words', ['Words', ' from Language'], 'k-word'), tk('wolves', ['Wolves', ', to their Canto card'], 'k-wolf'), tk('lines', ['Lines', ', in the line’s own colour'], 'k-line'),
+      tk('first', 'Only the first time each one appears'), tk('marked', 'Only words I mark myself'),
+      o.marked ? h('div', { class: 'cn-m', text: 'Select a word while writing and press ⌁ link. In your file it is written [[like this]].' }) : null);
+  }
+  function loreTerms(L) {
+    const o = linkOpts(), out = [];
+    if (o.words) for (const w of L.words) if (w.w.length > 1) out.push({ t: w.w, kind: 'word', w, plural: true });
+    if (o.wolves) for (const [id, w] of Object.entries(L.wolves)) if (w.n && w.n.length > 1) out.push({ t: w.n, kind: 'wolf', id, w });
+    if (o.lines) for (const l of bloodOpts(L)) if (l.n.length > 1) out.push({ t: l.n, kind: 'line', l });
+    return out.sort((a, b) => b.t.length - a.t.length);
+  }
+  function linkLore(root, L) {
+    const o = linkOpts(), terms = loreTerms(L);
+    const byKey = new Map(); for (const x of terms) if (!byKey.has(key(x.t))) byKey.set(key(x.t), x);
+    const find = (s) => byKey.get(key(s)) || byKey.get(key(s).replace(/(es|s)$/, '')) || byKey.get(key(s).replace(/s$/, ''));
+    const esc = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = terms.length && !o.marked ? new RegExp(`(?<![\\p{L}\\p{N}])(${terms.map((x) => esc(x.t)).join('|')})(?:es|s)?(?![\\p{L}\\p{N}])`, 'giu') : null;
+    const seen = new Set();
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: (n) => (n.parentNode.closest('h3,h4,figcaption,.cn-lk') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
+    const nodes = []; while (walker.nextNode()) nodes.push(walker.currentNode);
+    for (const tn of nodes) {
+      const text = tn.nodeValue, frag = document.createDocumentFragment();
+      let last = 0, any = false;
+      const pieces = [];
+      // [[marked]] words always link (when that kind is switched on); the brackets never show
+      for (const m of text.matchAll(/\[\[([^\]\n]+)\]\]/g)) pieces.push({ at: m.index, len: m[0].length, show: m[1], term: find(m[1]), marked: true });
+      if (re) for (const m of text.matchAll(re)) if (!pieces.some((p) => m.index < p.at + p.len && p.at < m.index + m[0].length)) pieces.push({ at: m.index, len: m[0].length, show: m[0], term: find(m[1]) });
+      pieces.sort((a, b) => a.at - b.at);
+      for (const p of pieces) {
+        frag.append(text.slice(last, p.at)); last = p.at + p.len; any = true;
+        const k = p.term && p.term.kind + ':' + key(p.term.t);
+        if (!p.term || (o.first && seen.has(k))) { frag.append(p.show); continue; }
+        seen.add(k);
+        const sp = h('span', { class: 'cn-lk k-' + p.term.kind, tabindex: '0', text: p.show });
+        if (p.term.kind === 'line') sp.style.setProperty('--lk', colours(L, p.term.t)[0] || 'var(--cn-ember)');
+        hookLink(sp, L, p.term);
+        frag.append(sp);
+      }
+      if (!any) continue;
+      frag.append(text.slice(last));
+      tn.replaceWith(frag);
+    }
+  }
+  let lkPop = null, lkTimer = 0;
+  function closeLink() { clearTimeout(lkTimer); if (lkPop) { lkPop.remove(); lkPop = null; } }
+  function hookLink(el, L, term) {
+    const open = () => {
+      closeLink();
+      const card = h('div', { class: 'cn cn-lpop', role: 'tooltip' });
+      const add = (...k) => card.append(...k.filter((x) => x != null && x !== false));
+      if (term.kind === 'word') {
+        const w = term.w;
+        add(h('div', { class: 'cn-lph' }, h('b', { text: w.w }), w.kind ? h('span', { class: 'cn-m', text: w.kind }) : null),
+          w.say ? h('div', { class: 'cn-m', text: 'say ' + w.say }) : null, h('p', { text: w.meaning }),
+          h('button', { class: 'cn-a', type: 'button', text: 'open in Language', onclick: () => { closeLink(); langQuery = w.w; subs.Language = ALL_WORDS; save('subs', subs); openTab('Language'); render(); } }));
+      } else if (term.kind === 'wolf') {
+        const w = term.w;
+        add(h('div', { class: 'cn-lph' }, h('b', { text: w.n }), h('span', { class: 'cn-m', text: '#' + term.id })),
+          h('p', {}, w.line ? linePill(L, w.line) : null, ' ', [w.role, w.born && 'born ' + whenText(L, w.born)].filter(Boolean).join(' · ')),
+          h('a', { class: 'cn-a', href: '/wolf/' + term.id, text: 'open its page' }));
+      } else {
+        const l = term.l, n = Object.values(L.wolves).filter((w) => key(w.line) === key(l.n)).length;
+        const told = taleOf(L, l.n) && taleOf(L, l.n).md.trim();
+        add(h('div', { class: 'cn-lph' }, h('span', {}, dot(L, l.n), ' ', h('b', { text: l.n })), h('span', { class: 'cn-m', text: `${n} wol${n === 1 ? 'f' : 'ves'}` })),
+          l.meaning ? h('p', { text: l.meaning }) : l.a ? h('p', { text: `a family of ${l.a} and ${l.b}` }) : null,
+          told ? h('button', { class: 'cn-a', type: 'button', text: `read ${l.n}’s tale`, onclick: () => { closeLink(); openTale(l.n); } }) : null);
+      }
+      card.addEventListener('mouseenter', () => clearTimeout(lkTimer));
+      card.addEventListener('mouseleave', () => { lkTimer = setTimeout(closeLink, 250); });
+      document.body.append(card);
+      const r = el.getBoundingClientRect(), cw = Math.min(260, innerWidth - 16);
+      card.style.width = cw + 'px';
+      card.style.left = Math.max(8, Math.min(r.left - 16, innerWidth - cw - 8)) + 'px';
+      const below = r.bottom + card.offsetHeight + 10 < innerHeight;
+      card.style.top = (below ? r.bottom + 6 : Math.max(8, r.top - card.offsetHeight - 6)) + 'px';
+      lkPop = card;
+    };
+    el.addEventListener('mouseenter', () => { clearTimeout(lkTimer); lkTimer = setTimeout(open, 120); });
+    el.addEventListener('mouseleave', () => { clearTimeout(lkTimer); lkTimer = setTimeout(closeLink, 250); });
+    el.addEventListener('click', (e) => { e.stopPropagation(); clearTimeout(lkTimer); open(); });
+    el.addEventListener('keydown', (e) => { if (e.key === 'Enter') open(); if (e.key === 'Escape') closeLink(); });
+  }
+  document.addEventListener('click', (e) => { if (lkPop && !lkPop.contains(e.target)) closeLink(); });
+  addEventListener('scroll', () => closeLink(), true);
 
   function nudgeBox(L, page, meta, where) {
     const add = (q) => {
@@ -2279,6 +2559,11 @@
       tb(h('b', { text: 'B' }), 'Bold', cmd('bold')), tb(h('i', { text: 'I' }), 'Italic', cmd('italic')), h('span', { class: 'cn-sep' }),
       tb('H', 'Heading', heading, 'font-family:var(--cn-disp);font-weight:700'), tb('• list', 'List', cmd('insertUnorderedList')), h('span', { class: 'cn-sep' }),
       tb('🖼 picture', 'Add a picture', openPic),
+      linkOpts().marked ? tb('⌁ link', 'Link the selected word to your lore', () => {
+        ed.focus(); if (range) { const s = getSelection(); s.removeAllRanges(); s.addRange(range); }
+        const t = String(getSelection()).trim(); if (!t || /[\[\]\n]/.test(t)) return;
+        document.execCommand('insertText', false, `[[${t}]]`); keep();
+      }) : null,
       tb('✦ need a nudge?', 'Need a nudge?', () => { keep(); nudge.textContent = ''; nudge.append(nudgeBox(L, page, meta, where)); }, 'margin-left:auto;border-color:var(--cn-ember);color:#f0b48f'));
     bar.lastChild.setAttribute('data-walk', 'tale-nudge');
     const done = () => { keep(); if (taleMarkOff) taleMarkOff(); taleEdit = null; refreshTales(); };
@@ -2708,7 +2993,9 @@
     // Names, for a pup
     if (!/adult|elder|senior/i.test(game) || /^new pup/i.test(name)) {
       const ns = namesFor(L, id);
-      if (ns.length) box.append(h('div', { class: 'cn-lb', text: 'Names waiting' }), h('div', { class: 'cn-row l' }, nameChips(L, id), h('span', { class: 'cn-m', text: 'tap one to copy it' })));
+      if (ns.length) box.append(h('div', { class: 'cn-lb', text: 'Names waiting' }), h('div', { class: 'cn-row l', style: 'flex-wrap:wrap' }, nameChips(L, id)),
+        h('div', { class: 'cn-m' }, 'Best fits first: line, sex, season and coat. Tap one to copy it. ',
+          h('button', { class: 'cn-a', type: 'button', text: namesAll ? 'show the best few' : 'show all names', onclick: () => { namesAll = !namesAll; decoratePage(); } })));
     }
     const lastGiven = L.names.filter((x) => x.given && x.given.id === id && x.given.at).sort((a, b) => b.given.at - a.given.at)[0];
     if (lastGiven) box.append(h('div', { class: 'cn-m' }, `${lastGiven.n} was taken off the list when Canto saw it on this wolf. `,
