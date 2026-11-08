@@ -24,6 +24,7 @@ Hollow + Ashen = Emberfall
 
 ## Wolves
 Asagi (17434418): Hollow, Storykeeper, born late Ashfall, Year 4, projects Silver Coats
+  - became Storykeeper: early Deepcold, Year 5, every year
 
 ## Roles
 Alpha, Healer, Scout, Storykeeper

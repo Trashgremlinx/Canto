@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canto
 // @namespace    fallowe.canto
-// @version      0.2.0.1
+// @version      0.3.0
 // @description  Canto hooks your pack's own lore into Wolvden: its words, its bloodlines, its calendar and its names. An add-on for Twill; Twill must be installed. It only reads the page you have open and never plays the game for you.
 // @author       Fallowe (Society of Fur)
 // @homepageURL  https://trashgremlinx.github.io/Canto/
@@ -23,7 +23,7 @@
   if (window.__canto) return;
   window.__canto = true;
 
-  const VERSION = '0.2.0.1';
+  const VERSION = '0.3.0';
   /* Versions work like Twill's: a new feature moves the middle number (0.2.0), an update the last
      (0.1.10), and a fix adds a hidden fourth (0.1.9.1) so Tampermonkey still updates. Players see
      three numbers; reports carry the full one. */
@@ -213,10 +213,22 @@
   }
 
   function parseWolves(lore, body) {
+    let last = null;
     for (const raw of items(body)) {
+      // A wolf day, indented under its wolf: "  - first litter: mid Longlight, Year 5, every year"
+      if (/^\s{2,}|^\t/.test(raw) && last) {
+        const dm = /^(.+?)\s*:\s*(.+)$/.exec(bullet(raw));
+        if (dm) {
+          const every = /,?\s*every\s+year\s*$/i.test(dm[2]);
+          const when = readWhen(lore, dm[2].replace(/,?\s*every\s+year\s*$/i, ''));
+          if (when) last.days.push({ t: dm[1].trim(), s: when.s, part: when.part, day: when.day, y: when.y, every });
+        }
+        continue;
+      }
       const m = /^(.+?)\s*\((\d+)\)\s*:\s*(.*)$/.exec(bullet(raw));
-      if (!m) continue;
-      const w = { n: m[1].trim(), line: '', role: '', born: null, proj: [] };
+      if (!m) { last = null; continue; }
+      const w = { n: m[1].trim(), line: '', role: '', born: null, proj: [], days: [] };
+      last = w;
       // "born late Ashfall, Year 4" is one part, though it has a comma in it.
       const rest = m[3].replace(/(born\s+[^,]+),\s*(year\s+-?\d+)/i, '$1 $2');
       // The first plain part is the line and the second the role. A wolf with a role but no line is
@@ -326,9 +338,10 @@
     out.Lines = lore.lines.filter((l) => l.k !== 'p').map((l) => `${l.n}: ${l.c}${l.meaning ? ', ' + l.meaning : ''}`);
     out.Projects = lore.lines.filter((l) => l.k === 'p' || l.k === 'bp').map((l) => (l.k === 'bp' ? l.n : `${l.n}: ${l.c}${l.meaning ? ', ' + l.meaning : ''}`));
     out.Families = lore.families.map((f) => `${f.a} + ${f.b} = ${f.n}${f.c ? ': ' + f.c : ''}`);
-    out.Wolves = Object.entries(lore.wolves).filter(([, w]) => w.line || w.role || w.born || (w.proj || []).length)
+    out.Wolves = Object.entries(lore.wolves).filter(([, w]) => w.line || w.role || w.born || (w.proj || []).length || (w.days || []).length)
       .map(([id, w]) => `${w.n || 'Wolf'} (${id}): ` + [w.line || NO_LINE, w.role, w.born && 'born ' + whenText(lore, w.born),
-        (w.proj || []).length && 'projects ' + w.proj.join(' & ')].filter(Boolean).join(', '));
+        (w.proj || []).length && 'projects ' + w.proj.join(' & ')].filter(Boolean).join(', ')
+        + (w.days || []).map((d) => `\n  - ${oneLine(d.t).replace(/:/g, '')}: ${whenText(lore, d)}${d.every ? ', every year' : ''}`).join(''));
     out['Outside studs'] = lore.studs.map((s) => s.n + (s.id ? ` (${s.id})` : '') + (s.line ? ': ' + s.line : ''));
     out.Roles = lore.roles.length ? [lore.roles.join(', ')] : [];
     const c = lore.cal, cl = [];
@@ -516,7 +529,7 @@
   // What's coming in the next year of days: each event's next day, soonest first.
   function coming(L, span = 24) {
     const t = today(), out = [];
-    for (const e of L.cal.events.concat(dynEvents(L))) {
+    for (const e of L.cal.events.concat(dynEvents(L), wolfEvents(L))) {
       for (let i = 0; i < span; i++) if (eventOn(L, e, t + i)) { out.push({ e, in: i }); break; }
     }
     return out.sort((a, b) => a.in - b.in);
@@ -866,6 +879,7 @@
   .cn-etag.t-alliance { background: #2a3a3e; color: #9fc3cf; } .cn-etag.t-battle { background: #45231f; color: #f08c7a; }
   .cn-etag.t-birth { background: #3d2a33; color: #e6a9c3; } .cn-etag.t-death { background: #2e2c33; color: #b9b3c9; }
   .cn-etag.t-anniversary { background: #3a3a22; color: #d9cf8a; }
+  .cn-etag.t-wolfday { background: #2c3a2a; color: #b5d3a1; }
   .cn-tmain .cn-read { margin-top: 0; border-top: 0; padding-top: 0; }
   .cn-tmain .cn-tbar { margin-top: 0; }
   .cn-tmain .cn-empty { margin-top: 0; border-top: 0; }
@@ -1238,7 +1252,7 @@
     const set = items.slice(rowPage * per, rowPage * per + per);
     const arrow = (d, label) => h('button', { class: 'cn-ar', type: 'button', 'aria-label': label, text: d < 0 ? '‹' : '›',
       disabled: rowPage + d < 0 || rowPage + d >= pages, onclick: () => { rowPage += d; render(); } });
-    return h('div', { class: 'cn-row2', role: 'tablist' }, pages > 1 ? arrow(-1, 'Previous') : null,
+    return h('div', { class: 'cn-row2', role: 'tablist', 'data-walk': 'row-' + rowKey }, pages > 1 ? arrow(-1, 'Previous') : null,
       ...set.map((s) => h('button', { type: 'button', role: 'tab', class: s === current ? 'on' : '', 'aria-selected': String(s === current), text: s, onclick: () => { rowPage = null; onPick(s); } })),
       pages > 1 ? [h('span', { class: 'cn-pg', text: `${rowPage + 1} of ${pages}` }), arrow(1, 'More')] : null);
   }
@@ -1431,7 +1445,7 @@
       return h('label', { class: 'cn-row l', style: 'cursor:pointer' }, i, label); };
     box.append(sw('hintsOff', 'Hint cards'), sw('walksOff', 'Walkthroughs the first time'),
       h('div', { class: 'cn-m', style: 'margin:4px 0 6px', text: 'Run a walkthrough again:' }),
-      h('div', { class: 'cn-btns', style: 'margin-top:0' }, ...Object.entries(WALKS).map(([id, w]) => {
+      h('div', { class: 'cn-btns', style: 'margin-top:0' }, ...Object.entries(WALKS).filter(([, w]) => !w.hidden).map(([id, w]) => {
         const why = w.can && w.can(L);
         return h('button', { class: 'cn-btn cn-sky', type: 'button', text: w.name, disabled: !!why, title: why || '', onclick: () => w.replay() });
       })));
@@ -1445,12 +1459,18 @@
       ['home-row', 'Step in, step back', 'Tap a section to open it. The ‹ at the top brings you back here.'],
       ['help', 'Help is always here', 'Stuck, or found something odd? The “?” opens help and lets you tell us.']],
     replay: () => { tab = HOME; save('tab', HOME); render(); startWalk('home'); } },
-    calendar: { name: 'Calendar setup', steps: [
+    calendar: { name: 'Calendar', steps: [
       ['cal-count', 'How will your years count?', 'Most packs count by Wolvden’s seasons: one year is one turn of all four. Pick a wolf instead if your years follow its age.'],
       ['cal-s2', 'When did Year 1 begin?', 'Today is fine. You can also start at a season, or set today to any year you like.'],
       ['cal-s3', 'Name your seasons', 'Optional. Leave a box empty to keep Wolvden’s name for that season.']],
-    can: (L) => (!L ? 'Load a pack first' : calendarReady(L) ? 'Shown while setting up the calendar' : ''),
-    replay: () => { tab = 'Calendar'; save('tab', tab); subs.Calendar = null; save('subs', subs); calStep = 0; render(); startWalk('calendar'); } },
+    can: (L) => (!L ? 'Load a pack first' : ''),
+    // Once the calendar is set up, the same button walks through the Overview instead.
+    replay: () => { tab = 'Calendar'; save('tab', tab); if (calendarReady(lore())) { subs.Calendar = 'Overview'; save('subs', subs); render(); startWalk('calview'); return; }
+      subs.Calendar = null; save('subs', subs); calStep = 0; render(); startWalk('calendar'); } },
+    calview: { name: 'Your calendar', hidden: true, steps: [
+      ['cal-wheel', 'Your year at a glance', 'The four seasons go round the wheel, with today marked and your events around the edge.'],
+      ['cal-soon', 'Coming up', 'Everything in the next 10 days, soonest first, with what kind of event it is.'],
+      ['row-Calendar', 'Your events, in groups', 'Festivals & holidays, Important dates and Other each keep their own events. Open one to add or edit.']] },
     line: { name: 'First line', steps: [
       ['line-name', 'Name it', 'A bloodline, a founding family, or a breeding project.'],
       ['line-colour', 'Pick a colour you can see', 'This is how the line shows on your den. Canto warns you if it’s too dark or too pale.'],
@@ -1897,7 +1917,7 @@
     box.append(h('div', { class: 'cn-btns' }, h('button', { class: 'cn-btn on', type: 'button', text: `${proj ? 'Add' : 'Give'} ${target} ${proj ? 'for' : 'to'} ${going.length} wol${going.length === 1 ? 'f' : 'ves'}`,
       onclick: () => {
         for (const w of going) {
-          const rec = L.wolves[w.id] || (L.wolves[w.id] = { n: w.n.startsWith('#') ? '' : w.n, line: '', role: '', born: null, proj: [] });
+          const rec = L.wolves[w.id] || (L.wolves[w.id] = { n: w.n.startsWith('#') ? '' : w.n, line: '', role: '', born: null, proj: [], days: [] });
           if (proj) { rec.proj = projOf(rec); if (!rec.proj.some((p) => key(p) === key(target))) rec.proj.push(target); } else rec.line = target;
         }
         trayPick = ''; trayKeep = null; changed();
@@ -1968,7 +1988,7 @@
     L.families.push({ a, b, n: name, c: '' });
     // The pups who brought the two lines together take the new family, unless they already have a line.
     for (const id of pups || []) {
-      const w = L.wolves[id] || (L.wolves[id] = { n: '', line: '', role: '', born: null });
+      const w = L.wolves[id] || (L.wolves[id] = { n: '', line: '', role: '', born: null, days: [] });
       if (!w.line) w.line = name;
     }
     changed();
@@ -2390,7 +2410,7 @@
     const at = (s, day, rad) => p((-90 + SEASONS.indexOf(s) * 90 + (day - 0.5) * 15) * Math.PI / 180, rad);
     const [tx, ty] = at(nowS, dayInSeason(t), R + 9);
     svg.append(el('circle', { cx: tx, cy: ty, r: 5.5, fill: '#f4e9da', stroke: '#2c241a', 'stroke-width': 2 }));
-    const wrap = h('div', { class: 'cn-wheel' }, svg);
+    const wrap = h('div', { class: 'cn-wheel', 'data-walk': 'cal-wheel' }, svg);
     const tip = h('div', { class: 'cn-tip', style: 'display:none;left:0;top:0' });
     wrap.append(tip);
     if (L.cal.show.wheel) {
@@ -2406,7 +2426,7 @@
         while (lane < lanes.length - 1 && placed.some((m) => m.s === e.s && m.lane === lane && !(b < m.a || a > m.b))) lane++;
         placed.push({ s: e.s, a, b, lane });
         const rad = lanes[lane];
-        const colour = e.every ? '#db5f28' : '#d47f25';
+        const colour = e.kind === 'birth' ? '#e6a9c3' : e.kind === 'wolfday' ? '#8fbf6a' : e.every ? '#db5f28' : '#d47f25';
         let mark, tipAt;
         if (a === b) {
           const [x, y] = at(e.s, a, rad);
@@ -2436,17 +2456,18 @@
 
   function renderCalendar(box, L, sub) {
     if (!calendarReady(L)) { renderSetup(box, L); return; }
-    const tag = (e) => h('span', { class: 'cn-etag t-' + typeOf(e), text: e.remember ? 'in memory' : EVENT_TYPES[typeOf(e)] });
+    const tag = (e) => h('span', { class: 'cn-etag t-' + (e.kind === 'wolfday' ? 'wolfday' : typeOf(e)), text: e.remember ? 'in memory' : e.kind === 'wolfday' ? 'Wolf day' : EVENT_TYPES[typeOf(e)] });
     if (sub === 'Overview') {
       box.append(wheel(L));
+      setTimeout(() => queueWalk('calview'), 300);
       if (L.cal.count === 'wolf' && yearOn(L, today()) == null) box.append(h('div', { class: 'cn-note', text: `Open wolf #${L.cal.wolf}’s page once so Canto can read its age and count the year.` }));
       // Everything in the next 10 days, soonest first, each with its type.
       const soon = coming(L, 10);
       box.append(h('div', { class: 'cn-lb', text: 'The next 10 days' }));
-      const list = h('div', { class: 'cn-list' });
+      const list = h('div', { class: 'cn-list', 'data-walk': 'cal-soon' });
       if (!soon.length) list.append(h('div', { class: 'cn-m', text: 'Nothing in the next 10 days.' }));
       for (const { e, in: n } of soon) list.append(h('div', { class: 'cn-row cn-ev' }, h('span', { class: 'cn-ed2' }, n === 0 ? 'today' : n === 1 ? 'tomorrow' : ['in ' + n, h('small', { text: 'days' })]),
-        h('b', { class: 'cn-strong', text: e.t }), tag(e)));
+        h('b', { class: 'cn-strong', text: e.t }), sinceText(L, e) ? h('span', { class: 'cn-m', text: sinceText(L, e) }) : null, tag(e)));
       box.append(list);
       const tick = (k, label) => { const i = h('input', { type: 'checkbox', checked: !!L.cal.show[k] }); i.addEventListener('change', () => { L.cal.show[k] = i.checked; changed(); }); return h('label', { class: 'cn-row l', style: 'cursor:pointer' }, i, label); };
       box.append(h('div', { class: 'cn-lb', text: 'Show what’s coming' }), tick('wheel', 'on the wheel, on hover'), tick('top', 'at the top of the hub'));
@@ -2470,6 +2491,20 @@
     if (calEdit === 'new') all.append(eventForm(L, null, g[2]));
     box.append(h('div', { class: 'cn-m', style: 'margin-bottom:4px', text: g[1].replace(/^\w/, (c) => c.toUpperCase()) + '.' }), all,
       h('div', { class: 'cn-btns' }, h('button', { class: 'cn-btn', type: 'button', text: 'Add an event', onclick: () => { calEdit = 'new'; render(); } })));
+    // Birthdays and wolf days, from the wolves themselves, apart from the dates you typed.
+    if (g[2].includes('birth')) {
+      const o = wolfOpts(), we = wolfEvents(L);
+      box.append(h('div', { class: 'cn-lb', text: 'From your wolves' }));
+      const wl = h('div', { class: 'cn-list' });
+      for (const e of we) {
+        const when = e.kind === 'birth' ? whenText(L, { s: e.s, part: e.part, day: e.day, y: null }) + (e.since != null ? ` · born Year ${e.since}` : '')
+          : whenText(L, { s: e.s, part: e.part, day: e.day, y: e.since }) + (e.every ? ' · every year' : ' · once');
+        wl.append(h('div', { class: 'cn-row' }, h('span', {}, h('b', { class: 'cn-strong', text: e.t }), h('br'), h('span', { class: 'cn-m', text: when })), tag(e)));
+      }
+      if (!we.length) wl.append(h('div', { class: 'cn-m', text: o.births || o.days ? 'Give a wolf a lore birth or a wolf day on its Canto card, and it shows here.' : 'Both are switched off below.' }));
+      const tk = (k, label) => { const i = h('input', { type: 'checkbox', checked: !!o[k] }); i.addEventListener('change', () => { setWolfOpt(k, i.checked); render(); }); return h('label', { class: 'cn-row l', style: 'cursor:pointer' }, i, label); };
+      box.append(wl, tk('births', 'Birthdays, from your living wolves’ lore births'), tk('days', 'Wolf days, from your wolves’ cards'));
+    }
     // Deaths from the Pack Dynasty sit with the important dates, apart from the ones you typed.
     if (g[2].includes('death')) {
       const o = dynOpts(), deaths = dynEvents(L).filter((e) => !e.remember);
@@ -2657,6 +2692,17 @@
       const by = w && w.born ? w.born.y : counted ? counted.y : null;
       if (dt && dt.y != null && by != null) box.append(h('div', { class: 'cn-m', text: `Lived ${Math.max(0, dt.y - by)} year${dt.y - by === 1 ? '' : 's'} in your pack’s count` }));
     }
+    // Wolf days: first litter, became alpha... anything the player names
+    box.append(h('div', { class: 'cn-lb', text: 'Wolf days' }));
+    const days = (w && w.days) || [];
+    for (const d of days) box.append(h('div', { class: 'cn-row' }, h('span', {}, h('b', { class: 'cn-strong', text: d.t }), h('br'), h('span', { class: 'cn-m', text: whenText(L, d) + (d.every ? ' · every year' : '') })),
+      h('span', { class: 'cn-row l', style: 'padding:0' }, h('span', { class: 'cn-etag t-wolfday', text: 'Wolf day' }),
+        h('button', { class: 'cn-a', type: 'button', text: '×', 'aria-label': 'Remove ' + d.t, style: 'text-decoration:none;font-size:13px', onclick: () => {
+          if (confirm(`Remove “${d.t}”?`)) setWolf(L, id, name, { days: days.filter((x) => x !== d) });
+        } }))));
+    const dayRow = h('div', { class: 'cn-row' }, h('span', { class: 'cn-m', text: days.length ? '' : calendarReady(L) ? 'A first litter, a new role, a scar: days worth keeping.' : 'Set up the calendar to keep wolf days.' }),
+      calendarReady(L) ? h('button', { class: 'cn-a', type: 'button', text: 'add a day', onclick: () => { dayRow.replaceWith(dayForm(L, id, name, w)); } }) : null);
+    box.append(dayRow);
     const game = gone ? 'Elder' : rowValue('Age');
     if (w && w.born && counted) box.append(h('div', { class: 'cn-m', text: 'Wolvden’s count: ' + whenText(L, counted) }));
     // Names, for a pup
@@ -2677,7 +2723,7 @@
       h('div', { class: 'cn-m', text: 'Remembered at once, and added to “Copy what changed” for your file.' }));
   }
   function setWolf(L, id, name, patch) {
-    const w = L.wolves[id] || (L.wolves[id] = { n: name, line: '', role: '', born: null });
+    const w = L.wolves[id] || (L.wolves[id] = { n: name, line: '', role: '', born: null, days: [] });
     if (name && !w.n) w.n = name;   // the file's own name for the wolf wins over the page's styled one
     Object.assign(w, patch);
     changed();
@@ -2709,6 +2755,22 @@
         setWolf(L, id, name, { born: { s: s.value, part: part.value, day: null, y: Number.isFinite(yr) ? yr : null } });
       } }), h('button', { class: 'cn-btn', type: 'button', text: 'Cancel', onclick: () => decoratePage() }),
       w && w.born ? h('button', { class: 'cn-btn', type: 'button', text: 'Let Canto count it', style: 'margin-left:auto', onclick: () => setWolf(L, id, name, { born: null }) }) : null));
+  }
+  function dayForm(L, id, name, w) {
+    const t = h('input', { class: 'cn-in', placeholder: 'what happened', style: 'flex:1' });
+    const part = h('select', { class: 'cn-in' }, h('option', { value: '', text: 'all season' }), ...['early', 'mid', 'late'].map((x) => h('option', { value: x, text: x })));
+    const s = h('select', { class: 'cn-in' }, ...SEASONS.map((x) => h('option', { value: x, text: seasonName(L, x), selected: seasonOnDay(today()) === x })));
+    const y = h('input', { class: 'cn-in', type: 'number', value: yearOn(L, today()) ?? '', style: 'width:70px' });
+    const every = h('input', { type: 'checkbox' });
+    return h('div', { class: 'cn-form' }, h('span', { class: 'cn-m', text: 'Wolf day' }), h('span', { class: 'cn-row l', style: 'padding:0' }, t),
+      h('span', { class: 'cn-row l', style: 'padding:0' }, part, s, 'Year', y),
+      h('label', { class: 'cn-row l', style: 'padding:0;cursor:pointer' }, every, 'remember it every year'),
+      h('div', { class: 'cn-btns' }, h('button', { class: 'cn-btn on', type: 'button', text: 'Add the day', onclick: () => {
+        const what = t.value.replace(/[:\s]+/g, ' ').trim();
+        if (!what) { t.focus(); return; }
+        const yr = parseInt(y.value, 10);
+        setWolf(L, id, name, { days: ((w && w.days) || []).concat({ t: what, s: s.value, part: part.value, day: null, y: Number.isFinite(yr) ? yr : null, every: every.checked }) });
+      } }), h('button', { class: 'cn-btn', type: 'button', text: 'Cancel', onclick: () => decoratePage() })));
   }
   // ================================================================ the Pack Dynasty
 
@@ -2757,6 +2819,28 @@
       if (o.yearly) out.push({ id: 'dynr-' + x.did, dyn: true, remember: true, t: `Remembering ${x.n}`, type: 'death', every: true, y: null, notY: dt.y, s: dt.s, part: '', day: dt.day, lead: x.lead });
     }
     return out;
+  }
+  /* Birthdays from the wolves' lore births (living wolves only) and the wolf days written under
+     each wolf. Shown, never copied: change a birth and its birthday moves with it. */
+  const wolfOpts = () => Object.assign({ births: true, days: true }, load('wolfOpts', {}));
+  function setWolfOpt(k, v) { save('wolfOpts', Object.assign(wolfOpts(), { [k]: v })); }
+  function wolfEvents(L) {
+    if (!calendarReady(L)) return [];
+    const o = wolfOpts(), dead = deadIds(L), out = [];
+    for (const [id, w] of Object.entries(L.wolves)) {
+      const n = w.n || 'Wolf #' + id;
+      if (o.births && w.born && w.born.s && !dead.has(id)) out.push({ id: 'born-' + id, wolf: id, kind: 'birth', t: `${n}’s birthday`, type: 'birth', every: true, y: null, since: w.born.y, s: w.born.s, part: w.born.part, day: w.born.day });
+      if (o.days) (w.days || []).forEach((d, i) => out.push({ id: `wd-${id}-${i}`, wolf: id, kind: 'wolfday', t: `${n}: ${d.t}`, type: 'other', every: d.every, y: d.every ? null : d.y, since: d.y, s: d.s, part: d.part, day: d.day }));
+    }
+    return out;
+  }
+  // "turns 3" for a birthday, "2 years ago" for a wolf day kept every year
+  function sinceText(L, e) {
+    if (!e.wolf || !e.every || e.since == null) return '';
+    const y = yearOn(L, today());
+    const n = y == null ? 0 : y - e.since;
+    if (n <= 0) return '';
+    return e.kind === 'birth' ? `turns ${n}` : `${n} year${n === 1 ? '' : 's'} ago`;
   }
   // The two Dynasty lists: Canto notes who died when, and adds a Line column.
   function decorateDynList(page) {
@@ -2836,7 +2920,7 @@
     const a = lineOfWolf(L, p.m), b = lineOfWolf(L, p.f);
     // Keep the wolf's name from the page's heading, so the file says who it is.
     const nm = ((document.querySelector('#main h1 a') || {}).textContent || '').trim();
-    if (nm && !L.wolves[id]) L.wolves[id] = { n: nm, line: '', role: '', born: null };
+    if (nm && !L.wolves[id]) L.wolves[id] = { n: nm, line: '', role: '', born: null, days: [] };
     const w = L.wolves[id];
     const box = h('div', { class: 'cn-b' });
     const outside = (pid) => (!L.wolves[pid] && studById(L, pid) ? h('span', { class: 'cn-out', title: 'An outside stud, from your Bloodlines tab', text: 'outside' }) : null);
