@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canto
 // @namespace    fallowe.canto
-// @version      0.2.0
+// @version      0.2.0.1
 // @description  Canto hooks your pack's own lore into Wolvden: its words, its bloodlines, its calendar and its names. An add-on for Twill; Twill must be installed. It only reads the page you have open and never plays the game for you.
 // @author       Fallowe (Society of Fur)
 // @homepageURL  https://trashgremlinx.github.io/Canto/
@@ -23,7 +23,7 @@
   if (window.__canto) return;
   window.__canto = true;
 
-  const VERSION = '0.2.0';
+  const VERSION = '0.2.0.1';
   /* Versions work like Twill's: a new feature moves the middle number (0.2.0), an update the last
      (0.1.10), and a fix adds a hidden fourth (0.1.9.1) so Tampermonkey still updates. Players see
      three numbers; reports carry the full one. */
@@ -89,6 +89,22 @@
 
   const SEASONS = ['spring', 'summer', 'autumn', 'winter'];
   const SECTION_ORDER = ['Language', 'Lines', 'Projects', 'Families', 'Wolves', 'Outside studs', 'Roles', 'Calendar', 'Names', 'Tales'];
+  // Up here, before any file is read: a line with no colour of its own takes the next of these.
+  const PALETTE = ['#3fc5a0', '#d9dee6', '#f08a3c', '#c37ad6', '#e8c547', '#5aa7e6', '#e86a7a', '#8fd16a'];
+  const pickColour = (i) => PALETTE[i % PALETTE.length];
+  const NO_LINE = 'no line';
+  // Every entry in the file is one line long; line breaks typed into a box become spaces.
+  const oneLine = (s) => String(s || '').replace(/\s*[\r\n]+\s*/g, ' ').trim();
+  /* A file may write a colour short (#fff) or with see-through (#rrggbbaa), but the colour picker and
+     the den's glow need the plain six-digit form, so every colour is kept as #rrggbb. Anything else is
+     no colour at all. */
+  function hexColour(c) {
+    const v = String(c || '').trim().replace(/^#/, '').toLowerCase();
+    if (!/^[0-9a-f]+$/.test(v)) return '';
+    if (v.length === 3 || v.length === 4) return '#' + v.slice(0, 3).split('').map((x) => x + x).join('');
+    if (v.length === 6 || v.length === 8) return '#' + v.slice(0, 6);
+    return '';
+  }
 
   function emptyLore(name, keeper) {
     return { name: name || 'My pack', keeper: keeper || '', words: [], lines: [], families: [], wolves: {}, studs: [], tales: [], taleCats: [], roles: [],
@@ -126,7 +142,13 @@
       else lore.lines.push({ n: p.n, c: p.c || pickColour(lore.lines.length), meaning: p.meaning, k: 'p' });
     }
     delete lore.projects;
+    clearNoLine(lore);
     return lore;
+  }
+  // "no line" in a wolf's line place means it has none, unless the pack really has a line by that name.
+  function clearNoLine(lore) {
+    const real = [...lore.lines, ...(lore.families || [])].some((x) => key(x.n) === NO_LINE);
+    if (!real) for (const w of Object.values(lore.wolves || {})) if (key(w.line) === NO_LINE) w.line = '';
   }
 
   function parseWords(lore, body) {
@@ -156,7 +178,7 @@
       const l = bullet(raw);
       const m = /^([^:]+):\s*(#[0-9a-f]{3,8})?\s*,?\s*(.*)$/i.exec(l);
       if (!m) continue;
-      lore.lines.push({ n: m[1].trim(), c: (m[2] || '').toLowerCase() || pickColour(lore.lines.length), meaning: m[3].trim(), k: 'b' });
+      lore.lines.push({ n: m[1].trim(), c: hexColour(m[2]) || pickColour(lore.lines.length), meaning: m[3].trim(), k: 'b' });
     }
   }
   // Breeding groups, read once every section is in (see parseLore).
@@ -164,7 +186,7 @@
     lore.projects = lore.projects || [];
     for (const raw of items(body)) {
       const m = /^([^:]+?)\s*(?::\s*(#[0-9a-f]{3,8})?\s*,?\s*(.*))?$/i.exec(bullet(raw));
-      if (m && m[1].trim()) lore.projects.push({ n: m[1].trim(), c: (m[2] || '').toLowerCase(), meaning: (m[3] || '').trim() });
+      if (m && m[1].trim()) lore.projects.push({ n: m[1].trim(), c: hexColour(m[2]), meaning: (m[3] || '').trim() });
     }
   }
   // "### Title" starts each page; everything under it, up to the next, is the page in Markdown.
@@ -186,7 +208,7 @@
   function parseFamilies(lore, body) {
     for (const raw of items(body)) {
       const m = /^(.+?)\s*\+\s*(.+?)\s*=\s*([^:]+?)\s*(?::\s*(#[0-9a-f]{3,8}))?$/i.exec(bullet(raw));
-      if (m) lore.families.push({ a: m[1].trim(), b: m[2].trim(), n: m[3].trim(), c: (m[4] || '').toLowerCase() });
+      if (m) lore.families.push({ a: m[1].trim(), b: m[2].trim(), n: m[3].trim(), c: hexColour(m[4]) });
     }
   }
 
@@ -197,6 +219,8 @@
       const w = { n: m[1].trim(), line: '', role: '', born: null, proj: [] };
       // "born late Ashfall, Year 4" is one part, though it has a comma in it.
       const rest = m[3].replace(/(born\s+[^,]+),\s*(year\s+-?\d+)/i, '$1 $2');
+      // The first plain part is the line and the second the role. A wolf with a role but no line is
+      // written "no line, Healer": "no line" holds the line's place, and is cleared in parseLore.
       for (const part of rest.split(/,\s*/).map((x) => x.trim()).filter(Boolean)) {
         const b = /^born\s+(.+)$/i.exec(part);
         if (b) { w.born = readWhen(lore, b[1]); continue; }
@@ -297,13 +321,13 @@
   }
   function sections(lore) {
     const out = {};
-    out.Language = lore.words.map((w) => `${w.w}: ${w.meaning}` + ((w.say || w.kind || w.also.length)
-      ? '\n  ' + [w.say && `Say: ${w.say}.`, w.kind && `Kind: ${w.kind}.`, w.also.length && `See also: ${w.also.join(', ')}`].filter(Boolean).join(' ') : ''));
+    out.Language = lore.words.map((w) => `${oneLine(w.w)}: ${oneLine(w.meaning)}` + ((w.say || w.kind || w.also.length)
+      ? '\n  ' + [w.say && `Say: ${oneLine(w.say)}.`, w.kind && `Kind: ${oneLine(w.kind)}.`, w.also.length && `See also: ${w.also.map(oneLine).join(', ')}`].filter(Boolean).join(' ') : ''));
     out.Lines = lore.lines.filter((l) => l.k !== 'p').map((l) => `${l.n}: ${l.c}${l.meaning ? ', ' + l.meaning : ''}`);
     out.Projects = lore.lines.filter((l) => l.k === 'p' || l.k === 'bp').map((l) => (l.k === 'bp' ? l.n : `${l.n}: ${l.c}${l.meaning ? ', ' + l.meaning : ''}`));
     out.Families = lore.families.map((f) => `${f.a} + ${f.b} = ${f.n}${f.c ? ': ' + f.c : ''}`);
     out.Wolves = Object.entries(lore.wolves).filter(([, w]) => w.line || w.role || w.born || (w.proj || []).length)
-      .map(([id, w]) => `${w.n || 'Wolf'} (${id}): ` + [w.line || 'no line', w.role, w.born && 'born ' + whenText(lore, w.born),
+      .map(([id, w]) => `${w.n || 'Wolf'} (${id}): ` + [w.line || NO_LINE, w.role, w.born && 'born ' + whenText(lore, w.born),
         (w.proj || []).length && 'projects ' + w.proj.join(' & ')].filter(Boolean).join(', '));
     out['Outside studs'] = lore.studs.map((s) => s.n + (s.id ? ` (${s.id})` : '') + (s.line ? ': ' + s.line : ''));
     out.Roles = lore.roles.length ? [lore.roles.join(', ')] : [];
@@ -356,6 +380,11 @@
     if (!Array.isArray(f.lore.tales)) f.lore.tales = [];   // and before Tales
     if (!Array.isArray(f.lore.taleCats)) f.lore.taleCats = [];
     for (const l of f.lore.lines) if (!l.k) l.k = 'b';
+    // Mend what 0.2.0 and earlier could keep wrongly: colours the picker can't show, and wolves whose
+    // missing line was read back as a line called "no line".
+    f.lore.lines.forEach((l, i) => { l.c = hexColour(l.c) || pickColour(i); });
+    for (const fam of f.lore.families || []) fam.c = hexColour(fam.c);
+    clearNoLine(f.lore);
   }
   if (store.active && !store.files[store.active]) store.active = Object.keys(store.files)[0] || null;
   const active = () => store.files[store.active] || null;
@@ -368,9 +397,6 @@
     commit();
     return id;
   }
-
-  const PALETTE = ['#3fc5a0', '#d9dee6', '#f08a3c', '#c37ad6', '#e8c547', '#5aa7e6', '#e86a7a', '#8fd16a'];
-  const pickColour = (i) => PALETTE[i % PALETTE.length];
 
   // ---- lines and families
   const lineOf = (L, n) => L.lines.find((x) => key(x.n) === key(n)) || null;
@@ -1522,7 +1548,8 @@
       say: h('input', { class: 'cn-in', value: w ? w.say : '', placeholder: 'how to say it' }), kind: h('input', { class: 'cn-in', value: w ? w.kind : defKind || '', placeholder: 'noun, place, verb, saying, song' }),
       also: h('input', { class: 'cn-in', value: w ? w.also.join(', ') : '', placeholder: 'other words, comma separated' }) };
     const ok = () => {
-      const word = f.w.value.trim(), meaning = f.meaning.value.trim();
+      // The meaning box wraps long meanings, but the file keeps each word on one line.
+      const word = oneLine(f.w.value), meaning = oneLine(f.meaning.value);
       if (!word || !meaning) return;
       const rec = w || {};
       Object.assign(rec, { w: word, meaning, say: f.say.value.trim(), kind: f.kind.value.trim(), also: f.also.value.split(/,\s*/).map((x) => x.trim()).filter(Boolean) });
@@ -2698,7 +2725,13 @@
     for (const [did, d] of Object.entries(dynAll())) {
       let id = d.id && L.wolves[d.id] ? d.id : null;
       const sure = !!id;
-      if (!id && d.n) { const hit = Object.entries(L.wolves).find(([, w]) => w.n && key(w.n) === key(d.n)); if (hit) id = hit[0]; }
+      /* By name only while the real number is unknown: once it is, a wolf in the lore who shares the
+         name is someone else, very likely still alive. Two or more of that name can't be told apart,
+         so none is picked. */
+      if (!d.id && d.n) {
+        const hits = Object.keys(L.wolves).filter((wid) => L.wolves[wid].n && key(L.wolves[wid].n) === key(d.n));
+        if (hits.length === 1) id = hits[0];
+      }
       out.push({ did, id, sure, n: d.n || (id && L.wolves[id].n) || 'A wolf', died: d.died || '', lead: !!d.lead });
     }
     return out;
