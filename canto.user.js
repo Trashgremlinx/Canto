@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Canto
 // @namespace    fallowe.canto
-// @version      0.4.0
+// @version      0.5.0
 // @description  Canto hooks your pack's own lore into Wolvden: its words, its bloodlines, its calendar and its names. An add-on for Twill; Twill must be installed. It only reads the page you have open and never plays the game for you.
 // @author       Fallowe (Society of Fur)
 // @homepageURL  https://trashgremlinx.github.io/Canto/
@@ -23,7 +23,7 @@
   if (window.__canto) return;
   window.__canto = true;
 
-  const VERSION = '0.4.0';
+  const VERSION = '0.5.0';
   /* Versions work like Twill's: a new feature moves the middle number (0.2.0), an update the last
      (0.1.10), and a fix adds a hidden fourth (0.1.9.1) so Tampermonkey still updates. Players see
      three numbers; reports carry the full one. */
@@ -45,9 +45,10 @@
 
   function h(tag, props, ...kids) {
     const n = document.createElement(tag);
+    if (tag === 'button' && props && props.text === 'Save') n.classList.add('cn-save');
     for (const [k, v] of Object.entries(props || {})) {
       if (v == null || v === false) continue;
-      if (k === 'class') n.className = v;
+      if (k === 'class') n.className = (n.className ? n.className + ' ' : '') + v;
       else if (k === 'text') n.textContent = v;
       else if (k === 'style') n.setAttribute('style', v);
       else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
@@ -88,7 +89,7 @@
      Any other section is kept as it is and written back untouched. */
 
   const SEASONS = ['spring', 'summer', 'autumn', 'winter'];
-  const SECTION_ORDER = ['Language', 'Lines', 'Projects', 'Families', 'Wolves', 'Outside studs', 'Roles', 'Calendar', 'Names', 'Tales'];
+  const SECTION_ORDER = ['Canto', 'Language', 'Lines', 'Projects', 'Families', 'Wolves', 'Outside studs', 'Roles', 'Calendar', 'Names', 'Tales'];
   // Up here, before any file is read: a line with no colour of its own takes the next of these.
   const PALETTE = ['#3fc5a0', '#d9dee6', '#f08a3c', '#c37ad6', '#e8c547', '#5aa7e6', '#e86a7a', '#8fd16a'];
   const pickColour = (i) => PALETTE[i % PALETTE.length];
@@ -107,7 +108,7 @@
   }
 
   function emptyLore(name, keeper) {
-    return { name: name || 'My pack', keeper: keeper || '', words: [], wordGroups: [], lines: [], families: [], wolves: {}, studs: [], tales: [], taleCats: [], roles: [],
+    return { name: name || 'My pack', keeper: keeper || '', look: '', words: [], wordGroups: [], lines: [], families: [], wolves: {}, studs: [], tales: [], taleCats: [], roles: [],
       cal: { count: '', start: null, wolf: null, offset: 1, names: {}, events: [], show: { wheel: true, top: true } },
       names: [], extra: [] };
   }
@@ -132,7 +133,7 @@
       const body = nl < 0 ? '' : chunk.slice(nl + 1);
       const which = SECTION_ORDER.find((s) => key(s) === key(title)) || (key(title) === 'words' ? 'Language' : null);
       if (!which) { lore.extra.push({ title, body: body.replace(/\s+$/, '') }); continue; }
-      ({ Language: parseWords, Lines: parseLines, Projects: parseProjects, Families: parseFamilies, Wolves: parseWolves, 'Outside studs': parseStuds,
+      ({ Canto: parseCanto, Language: parseWords, Lines: parseLines, Projects: parseProjects, Families: parseFamilies, Wolves: parseWolves, 'Outside studs': parseStuds,
         Roles: parseRoles, Calendar: parseCalendar, Names: parseNames, Tales: parseTales })[which](lore, body);
     }
     // A project named after one of the lines makes that line both; any other is a project of its own.
@@ -176,12 +177,21 @@
     }
   }
 
+  // "Colours: Sea", "Colours: line Rose" or "Colours: #e85c9a on #241c22"
+  function parseCanto(lore, body) {
+    for (const raw of items(body)) {
+      const m = /^colou?rs?\s*:\s*(.+)$/i.exec(bullet(raw));
+      if (m) lore.look = m[1].trim();
+    }
+  }
+  // A sub-line names its parents first: "Moonless › Silver: #c9d3df"
   function parseLines(lore, body) {
     for (const raw of items(body)) {
       const l = bullet(raw);
       const m = /^([^:]+):\s*(#[0-9a-f]{3,8})?\s*,?\s*(.*)$/i.exec(l);
       if (!m) continue;
-      lore.lines.push({ n: m[1].trim(), c: hexColour(m[2]) || pickColour(lore.lines.length), meaning: m[3].trim(), k: 'b' });
+      const path = m[1].split(/\s*(?:›|>)\s*/).map((x) => x.trim()).filter(Boolean);
+      lore.lines.push({ n: path[path.length - 1], p: path.length > 1 ? path[path.length - 2] : '', c: hexColour(m[2]) || pickColour(lore.lines.length), meaning: m[3].trim(), k: 'b' });
     }
   }
   // Breeding groups, read once every section is in (see parseLore).
@@ -358,7 +368,8 @@
     const out = {};
     out.Language = ((lore.wordGroups || []).length ? [`Groups: ${lore.wordGroups.map(oneLine).join(', ')}`] : []).concat(lore.words.map((w) => `${oneLine(w.w)}: ${oneLine(w.meaning)}` + ((w.say || w.kind || w.also.length)
       ? '\n  ' + [w.say && `Say: ${oneLine(w.say)}.`, w.kind && `Kind: ${oneLine(w.kind)}.`, w.also.length && `See also: ${w.also.map(oneLine).join(', ')}`].filter(Boolean).join(' ') : '')));
-    out.Lines = lore.lines.filter((l) => l.k !== 'p').map((l) => `${l.n}: ${l.c}${l.meaning ? ', ' + l.meaning : ''}`);
+    out.Canto = lore.look ? [`Colours: ${oneLine(lore.look)}`] : [];
+    out.Lines = treeLines(lore).filter((l) => l.k !== 'p').map((l) => `${linePath(lore, l.n).join(' › ')}: ${l.c}${l.meaning ? ', ' + l.meaning : ''}`);
     out.Projects = lore.lines.filter((l) => l.k === 'p' || l.k === 'bp').map((l) => (l.k === 'bp' ? l.n : `${l.n}: ${l.c}${l.meaning ? ', ' + l.meaning : ''}`));
     out.Families = lore.families.map((f) => `${f.a} + ${f.b} = ${f.n}${f.c ? ': ' + f.c : ''}`);
     out.Wolves = Object.entries(lore.wolves).filter(([, w]) => w.line || w.role || w.born || (w.proj || []).length || (w.days || []).length)
@@ -442,8 +453,27 @@
   /* A line is a bloodline ('b'), a breeding project ('p') or both ('bp'). A wolf carries one
      bloodline (a line or a family) and any number of projects. */
   const isBlood = (l) => l.k !== 'p';
+  /* Sub-lines: a bloodline can be "part of" another, up to three levels. Its wolves count in the
+     lines above it, and picking a line on the den lights up its sub-lines too. */
+  const parentOf = (L, n) => { const l = lineOf(L, n); return l && l.p && isBlood(l) && lineOf(L, l.p) && key(l.p) !== key(n) ? lineOf(L, l.p) : null; };
+  function linePath(L, n) { const out = [n]; let p = parentOf(L, n); while (p && out.length < 3 && !out.some((x) => key(x) === key(p.n))) { out.unshift(p.n); p = parentOf(L, p.n); } return out; }
+  const lineDepth = (L, n) => linePath(L, n).length - 1;
+  function under(L, n) {
+    const out = new Set([key(n)]);
+    let grew = true;
+    while (grew) { grew = false; for (const l of L.lines) if (!out.has(key(l.n)) && parentOf(L, l.n) && out.has(key(parentOf(L, l.n).n)) && lineDepth(L, l.n) <= 2) { out.add(key(l.n)); grew = true; } }
+    return out;
+  }
+  // The lines in tree order: each followed by its sub-lines
+  function treeLines(L) {
+    const out = [], seen = new Set();
+    const add = (l) => { if (seen.has(l)) return; seen.add(l); out.push(l); for (const c of L.lines) if (c !== l && parentOf(L, c.n) === l && lineDepth(L, c.n) <= 2) add(c); };
+    for (const l of L.lines) if (!parentOf(L, l.n) || lineDepth(L, l.n) > 2) add(l);
+    for (const l of L.lines) add(l);
+    return out;
+  }
   const isProj = (l) => l.k === 'p' || l.k === 'bp';
-  const bloodOpts = (L) => [...L.lines.filter(isBlood), ...L.families];
+  const bloodOpts = (L) => [...treeLines(L).filter(isBlood), ...L.families];
   const projOpts = (L) => L.lines.filter(isProj);
   const projOf = (w) => (w && w.proj) || [];
   /* A line's colour, or a family's parent colours (or its own, if the file gives one). Each parent
@@ -491,7 +521,7 @@
   }
   function linePill(L, n) {
     const f = famOf(L, n);
-    const pill = h('span', { class: 'cn-pill', tabindex: '0' }, dot(L, n), n);
+    const pill = h('span', { class: 'cn-pill', tabindex: '0' }, dot(L, n), lineOf(L, n) ? linePath(L, n).join(' › ') : n);
     if (f) {
       pill.title = `${f.n}: a family of ${f.a} and ${f.b}`;
       const tip = h('span', { class: 'cn-tip' }, h('b', { text: f.n }), `a family of ${f.a} and ${f.b}`);
@@ -619,6 +649,8 @@
     --cn-panel: #2c241a; --cn-card: #3a2f22; --cn-raise: #45382a; --cn-edge: #5a4a35; --cn-line: #4a3d2c;
     --cn-text: #e6dacb; --cn-soft: #bfae95; --cn-head: #f4e9da; --cn-headbg: linear-gradient(180deg, #3d3123, #2f261b);
     --cn-ember: #db5f28; --cn-on-ember: #fff6ee; --cn-in: #241d15;
+    --cn-hi: #e8a24c; --cn-hi2: #f0b48f; --cn-ico-a: #5a2f18; --cn-ico-b: #2f2116; --cn-ico-edge: #7a4a2a; --cn-ico-c: #f0a35c;
+    --cn-help: #6fa3b0; --cn-help-hi: #8fc3cf; --cn-help-text: #cfe3e8; --cn-help-soft: #9fbcc4; --cn-help-edge: #3f5a60; --cn-help-bg: #1d2a2d; --cn-help-on: #1f1912;
     --cn-disp: 'Eczar', Georgia, serif; --cn-body: 'Commissioner', system-ui, sans-serif;
     font: 13px/1.5 var(--cn-body); color: var(--cn-text); text-align: left; letter-spacing: normal;
   }
@@ -630,7 +662,7 @@
     --cn-disp: var(--dk-title-font, Georgia, serif); --cn-body: var(--dk-body-font, system-ui, sans-serif);
   }
   .cn-panel { background: var(--cn-panel); border: 1px solid var(--cn-edge); border-radius: 10px; box-shadow: 0 14px 34px rgba(0,0,0,.35); overflow: hidden; }
-  .cn-h { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--cn-headbg); border-bottom: 2px solid var(--cn-ember); }
+  .cn-h { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--cn-headbg); border-bottom: 2px solid var(--cn-ember); border-image: var(--cn-headline, none) 1; }
   .cn-h img { height: 22px; width: auto; }
   .cn-h b { font: 700 18px/1 var(--cn-disp); color: var(--cn-head); }
   .cn-h > span { margin-left: auto; font-size: 11.5px; color: var(--cn-soft); }
@@ -672,8 +704,8 @@
   .cn-wd { font: 700 16px var(--cn-disp); color: var(--cn-head); }
   .cn-form { display: grid; grid-template-columns: auto 1fr; gap: 6px 8px; align-items: center; margin-top: 6px; padding: 8px; border: 1px solid var(--cn-line); border-radius: 8px; background: rgba(0,0,0,.12); }
   .cn-form > .cn-btns { grid-column: 1 / -1; margin-top: 2px; }
-  .cn pre.cn-diff { margin: 0; background: #211a12; border: 1px solid var(--cn-line); border-radius: 6px; padding: 8px 10px; font: 12px/1.5 ui-monospace, Consolas, monospace; color: #e9c9a8; white-space: pre-wrap; max-height: 220px; overflow: auto; }
-  .cn-note { font-size: 12px; color: var(--cn-soft); padding: 6px 8px; border-left: 3px solid var(--cn-ember); background: rgba(219,95,40,.08); border-radius: 0 6px 6px 0; margin: 6px 0; }
+  .cn pre.cn-diff { margin: 0; background: var(--cn-in); border: 1px solid var(--cn-line); border-radius: 6px; padding: 8px 10px; font: 12px/1.5 ui-monospace, Consolas, monospace; color: var(--cn-hi2); white-space: pre-wrap; max-height: 220px; overflow: auto; }
+  .cn-note { font-size: 12px; color: var(--cn-soft); padding: 6px 8px; border-left: 3px solid var(--cn-ember); background: color-mix(in srgb, var(--cn-ember) 8%, transparent); border-radius: 0 6px 6px 0; margin: 6px 0; }
   /* words on the page */
   .cn-w { text-decoration: underline dotted #db5f28; text-decoration-thickness: 2px; text-underline-offset: 3px; cursor: help; }
   #cn-pop { position: absolute; z-index: 100001; width: 300px; }
@@ -691,67 +723,69 @@
   .cn-h .cn-sp { flex: 1; margin: 0; }
   .cn-h .cn-x { margin-left: 0; width: 24px; }
   .cn-help { width: 26px; height: 26px; border-radius: 50%; display: inline-grid; place-items: center; padding: 0; cursor: pointer;
-    font: 700 14px var(--cn-body); color: #8fc3cf; border: 1.5px solid #6fa3b0; background: rgba(111,163,176,.12); }
-  .cn-help:hover { background: rgba(111,163,176,.24); }
-  .cn-help.on { background: #6fa3b0; color: #1f1912; }
+    font: 700 14px var(--cn-body); color: var(--cn-help-hi); border: 1.5px solid var(--cn-help); background: color-mix(in srgb, var(--cn-help) 12%, transparent); }
+  .cn-help:hover { background: color-mix(in srgb, var(--cn-help) 24%, transparent); }
+  .cn-help.on { background: var(--cn-help); color: var(--cn-help-on); }
   .cn-back { background: none; border: 0; padding: 0 4px 0 0; margin: -3px 0 0 -2px; font: 24px/1 var(--cn-body); color: var(--cn-text); cursor: pointer; }
   .cn-back:hover { color: var(--cn-head); }
   .cn-home { display: flex; flex-direction: column; }
   .cn-hrow { display: flex; align-items: center; gap: 11px; width: 100%; text-align: left; padding: 9px 2px; background: none; border: 0; border-bottom: 1px solid var(--cn-line); cursor: pointer; color: var(--cn-text); font: inherit; }
   .cn-hrow:last-child { border-bottom: 0; }
-  .cn-hrow:hover b { color: #e8a24c; }
+  .cn-hrow:hover b { color: var(--cn-hi); }
   .cn-hrow.off { opacity: .45; cursor: default; }
   .cn-ht { display: flex; flex-direction: column; min-width: 0; }
   .cn-ht b { color: var(--cn-head); font-size: 14px; font-weight: 600; }
   .cn-ht small { color: var(--cn-soft); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cn-chev { margin-left: auto; color: var(--cn-soft); font-size: 19px; padding-left: 6px; }
   .cn-ico { width: 34px; height: 34px; flex: none; border-radius: 50%; display: grid; place-items: center;
-    background: radial-gradient(circle at 50% 70%, #5a2f18, #2f2116); border: 1px solid #7a4a2a; color: #f0a35c; }
+    background: radial-gradient(circle at 50% 70%, var(--cn-ico-a), var(--cn-ico-b)); border: 1px solid var(--cn-ico-edge); color: var(--cn-ico-c); }
+  .cn-hrow:nth-child(2n) .cn-ico { background: radial-gradient(circle at 50% 70%, var(--cn-ico2-a, var(--cn-ico-a)), var(--cn-ico-b)); border-color: var(--cn-ico2-edge, var(--cn-ico-edge)); color: var(--cn-ico2-c, var(--cn-ico-c)); }
   .cn .cn-ico svg { width: 20px; height: 20px; fill: currentColor; }
   .cn-row2 { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; padding: 7px 10px; background: rgba(0,0,0,.18); border-bottom: 1px solid var(--cn-line); }
   .cn-row2 button { font: 600 12px var(--cn-body); color: var(--cn-soft); background: none; border: 1px solid var(--cn-edge); border-radius: 99px; padding: 2px 10px; cursor: pointer; white-space: nowrap; }
   .cn-row2 button:hover { color: var(--cn-head); border-color: var(--cn-ember); }
-  .cn-row2 button.on { color: var(--cn-on-ember); background: var(--cn-ember); border-color: var(--cn-ember); }
+  .cn-row2 button.on { color: var(--cn-on-ember); background: var(--cn-tabon, var(--cn-ember)); border-color: var(--cn-tabon, var(--cn-ember)); }
+  .cn .cn-btn.on.cn-save { background: var(--cn-save, var(--cn-ember)); border-color: var(--cn-save, var(--cn-ember)); color: var(--cn-save-on, var(--cn-on-ember)); }
   .cn-row2 .cn-ar { width: 24px; height: 24px; padding: 0; border-radius: 50%; font-size: 15px; color: var(--cn-text); }
   .cn-row2 .cn-ar:disabled { opacity: .3; cursor: default; }
   .cn-pg { margin-left: auto; font-size: 11px; color: var(--cn-soft); }
   /* help as you go: all in the "?" blue, so it never reads as the pack's own lore */
-  .cn-guide { background: linear-gradient(180deg, rgba(111,163,176,.14), rgba(111,163,176,.04)); border: 1px solid #3f5a60; border-left: 4px solid #6fa3b0; border-radius: 8px; padding: 8px 10px; margin: 2px 0 10px; }
+  .cn-guide { background: linear-gradient(180deg, color-mix(in srgb, var(--cn-help) 14%, transparent), color-mix(in srgb, var(--cn-help) 4%, transparent)); border: 1px solid var(--cn-help-edge); border-left: 4px solid var(--cn-help); border-radius: 8px; padding: 8px 10px; margin: 2px 0 10px; }
   .cn-gh { display: flex; align-items: center; gap: 8px; }
-  .cn-gh b { font: 700 14px var(--cn-disp); color: #cfe3e8; }
-  .cn-gh > span { margin-left: auto; font-size: 11px; color: #9fbcc4; white-space: nowrap; }
-  .cn .cn-gh .cn-a, .cn .cn-hnav .cn-a, .cn .cn-tick { color: #9fbcc4; font-size: 11.5px; }
-  .cn-gbar { height: 5px; border-radius: 3px; background: #2a3a3e; margin: 6px 0 4px; overflow: hidden; }
-  .cn-gbar i { display: block; height: 100%; background: #6fa3b0; }
-  .cn-step { display: flex; gap: 8px; align-items: flex-start; padding: 3px 0; font-size: 12.5px; color: #d9cdb9; }
-  .cn-tk { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid #6fa3b0; flex: none; margin-top: 2px; display: grid; place-items: center; font: 700 10px var(--cn-body); font-style: normal; color: #1f1912; }
-  .cn-step.done .cn-tk { background: #6fa3b0; }
-  .cn-step.done > span { color: #8a9a9e; text-decoration: line-through; }
-  .cn-step.now > span b { color: #cfe3e8; }
+  .cn-gh b { font: 700 14px var(--cn-disp); color: var(--cn-help-text); }
+  .cn-gh > span { margin-left: auto; font-size: 11px; color: var(--cn-help-soft); white-space: nowrap; }
+  .cn .cn-gh .cn-a, .cn .cn-hnav .cn-a, .cn .cn-tick { color: var(--cn-help-soft); font-size: 11.5px; }
+  .cn-gbar { height: 5px; border-radius: 3px; background: var(--cn-help-edge); margin: 6px 0 4px; overflow: hidden; }
+  .cn-gbar i { display: block; height: 100%; background: var(--cn-help); }
+  .cn-step { display: flex; gap: 8px; align-items: flex-start; padding: 3px 0; font-size: 12.5px; color: var(--cn-text); }
+  .cn-tk { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--cn-help); flex: none; margin-top: 2px; display: grid; place-items: center; font: 700 10px var(--cn-body); font-style: normal; color: var(--cn-help-on); }
+  .cn-step.done .cn-tk { background: var(--cn-help); }
+  .cn-step.done > span { color: var(--cn-help-soft); text-decoration: line-through; }
+  .cn-step.now > span b { color: var(--cn-help-text); }
   .cn .cn-tick { margin-left: auto; padding-left: 8px; white-space: nowrap; }
-  .cn-hint { display: flex; gap: 10px; background: rgba(111,163,176,.1); border: 1px solid #3f5a60; border-radius: 8px; padding: 8px 10px; margin: 0 0 10px; }
-  .cn-hi { width: 22px; height: 22px; border-radius: 50%; background: #6fa3b0; color: #1f1912; font: 700 13px var(--cn-disp); display: grid; place-items: center; flex: none; }
-  .cn-hint p { margin: 0; font-size: 12.5px; color: #d9cdb9; } .cn-hint p b { color: #cfe3e8; }
+  .cn-hint { display: flex; gap: 10px; background: color-mix(in srgb, var(--cn-help) 10%, transparent); border: 1px solid var(--cn-help-edge); border-radius: 8px; padding: 8px 10px; margin: 0 0 10px; }
+  .cn-hi { width: 22px; height: 22px; border-radius: 50%; background: var(--cn-help); color: var(--cn-help-on); font: 700 13px var(--cn-disp); display: grid; place-items: center; flex: none; }
+  .cn-hint p { margin: 0; font-size: 12.5px; color: var(--cn-text); } .cn-hint p b { color: var(--cn-help-text); }
   .cn-hnav { display: flex; gap: 12px; margin-top: 4px; }
-  .cn-hint .cn-x { margin-left: auto; color: #9fbcc4; }
-  .cn-ok { width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid #6fa3b0; color: #9fbcc4; display: inline-grid; place-items: center; font: 700 10.5px var(--cn-body); font-style: normal; flex: none; }
-  .cn-ok.all { background: #6fa3b0; color: #1f1912; }
-  .cn input.cn-tog { appearance: none; -webkit-appearance: none; width: 30px; height: 17px; margin: 0; border-radius: 99px; background: #4a3d2c; position: relative; cursor: pointer; flex: none; transition: background .15s; }
-  .cn input.cn-tog::after { content: ''; position: absolute; left: 2px; top: 2px; width: 13px; height: 13px; border-radius: 50%; background: #bfae95; transition: left .15s; }
-  .cn input.cn-tog:checked { background: #6fa3b0; } .cn input.cn-tog:checked::after { left: 15px; background: #1f1912; }
-  .cn .cn-btn.cn-sky { background: none; border-color: #6fa3b0; color: #cfe3e8; }
+  .cn-hint .cn-x { margin-left: auto; color: var(--cn-help-soft); }
+  .cn-ok { width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid var(--cn-help); color: var(--cn-help-soft); display: inline-grid; place-items: center; font: 700 10.5px var(--cn-body); font-style: normal; flex: none; }
+  .cn-ok.all { background: var(--cn-help); color: var(--cn-help-on); }
+  .cn input.cn-tog { appearance: none; -webkit-appearance: none; width: 30px; height: 17px; margin: 0; border-radius: 99px; background: var(--cn-line); position: relative; cursor: pointer; flex: none; transition: background .15s; }
+  .cn input.cn-tog::after { content: ''; position: absolute; left: 2px; top: 2px; width: 13px; height: 13px; border-radius: 50%; background: var(--cn-soft); transition: left .15s; }
+  .cn input.cn-tog:checked { background: var(--cn-help); } .cn input.cn-tog:checked::after { left: 15px; background: var(--cn-help-on); }
+  .cn .cn-btn.cn-sky { background: none; border-color: var(--cn-help); color: var(--cn-help-text); }
   .cn .cn-btn.cn-sky:disabled { opacity: .45; cursor: default; }
-  #cn-walk .cn-spot { position: fixed; z-index: 2147483000; border-radius: 8px; outline: 2px solid #6fa3b0; outline-offset: 0; box-shadow: 0 0 0 9999px rgba(10,8,6,.6); pointer-events: none; transition: all .2s; }
-  #cn-walk .cn-bubble { position: fixed; z-index: 2147483001; background: #1d2a2d; border: 1px solid #6fa3b0; border-radius: 10px; padding: 10px 12px; box-shadow: 0 10px 26px rgba(0,0,0,.5); font: 13px/1.45 var(--cn-body); color: #d9cdb9; }
-  #cn-walk .cn-bubble::before { content: ''; position: absolute; top: -8px; left: var(--ax, 30px); border: 8px solid transparent; border-top: 0; border-bottom-color: #6fa3b0; }
-  #cn-walk .cn-bubble.up::before { top: auto; bottom: -8px; border-bottom: 0; border-top: 8px solid #6fa3b0; }
-  #cn-walk .cn-bn { font: 700 10.5px var(--cn-body); letter-spacing: .06em; text-transform: uppercase; color: #9fbcc4; }
-  #cn-walk .cn-bubble b { display: block; font: 700 15px var(--cn-disp); color: #cfe3e8; }
+  #cn-walk .cn-spot { position: fixed; z-index: 2147483000; border-radius: 8px; outline: 2px solid var(--cn-help); outline-offset: 0; box-shadow: 0 0 0 9999px rgba(10,8,6,.6); pointer-events: none; transition: all .2s; }
+  #cn-walk .cn-bubble { position: fixed; z-index: 2147483001; background: var(--cn-help-bg); border: 1px solid var(--cn-help); border-radius: 10px; padding: 10px 12px; box-shadow: 0 10px 26px rgba(0,0,0,.5); font: 13px/1.45 var(--cn-body); color: var(--cn-text); }
+  #cn-walk .cn-bubble::before { content: ''; position: absolute; top: -8px; left: var(--ax, 30px); border: 8px solid transparent; border-top: 0; border-bottom-color: var(--cn-help); }
+  #cn-walk .cn-bubble.up::before { top: auto; bottom: -8px; border-bottom: 0; border-top: 8px solid var(--cn-help); }
+  #cn-walk .cn-bn { font: 700 10.5px var(--cn-body); letter-spacing: .06em; text-transform: uppercase; color: var(--cn-help-soft); }
+  #cn-walk .cn-bubble b { display: block; font: 700 15px var(--cn-disp); color: var(--cn-help-text); }
   #cn-walk .cn-bubble p { margin: 3px 0 8px; font-size: 12.5px; }
   #cn-walk .cn-brow { display: flex; align-items: center; gap: 6px; }
   #cn-walk .cn-bdots { margin-left: auto; display: flex; gap: 4px; }
-  #cn-walk .cn-bdots i { width: 6px; height: 6px; border-radius: 50%; background: #3f5a60; }
-  #cn-walk .cn-bdots i.on { background: #6fa3b0; }
+  #cn-walk .cn-bdots i { width: 6px; height: 6px; border-radius: 50%; background: var(--cn-help-edge); }
+  #cn-walk .cn-bdots i.on { background: var(--cn-help); }
   /* Six tabs just fit; if a fallback font runs wider, the row scrolls sideways rather than cutting one off. */
   .cn-tabs { display: flex; gap: 0; padding: 6px 4px 0; background: rgba(0,0,0,.18); border-bottom: 1px solid var(--cn-line); overflow-x: auto; scrollbar-width: thin; }
   .cn-tabs button { font: 600 12px var(--cn-body); color: var(--cn-soft); padding: 6px 6px; white-space: nowrap; border-radius: 6px 6px 0 0; background: none; border: 0; cursor: pointer; }
@@ -760,21 +794,21 @@
   .cn-pack button { font: 12px var(--cn-body); padding: 2px 9px; border-radius: 99px; color: var(--cn-soft); border: 1px solid transparent; background: none; cursor: pointer; }
   .cn-pack button.on { color: var(--cn-head); border-color: var(--cn-edge); background: var(--cn-raise); }
   .cn-pack em { margin-left: auto; font-style: normal; color: var(--cn-soft); font-size: 11px; }
-  .cn-coming { padding: 6px 12px; font-size: 12px; color: var(--cn-head); background: rgba(219,95,40,.12); border-bottom: 1px solid var(--cn-line); }
+  .cn-coming { padding: 6px 12px; font-size: 12px; color: var(--cn-head); background: color-mix(in srgb, var(--cn-ember) 12%, transparent); border-bottom: 1px solid var(--cn-line); }
   .cn-coming b { color: var(--cn-ember); font-weight: 600; }
   .cn-about { text-align: center; margin: 18px 0 4px; padding-top: 14px; border-top: 1px solid var(--cn-line); }
   .cn-about img { height: 92px; width: auto; }
   .cn-about-name { font: 700 26px/1 var(--cn-disp); color: var(--cn-head); margin-top: 4px; }
   .cn-note2 { color: var(--cn-text); font-size: 12.5px; margin: 8px 0 0; }
-  .cn a.cn-ln { color: #e8a24c; text-decoration: underline; text-underline-offset: 2px; }
+  .cn a.cn-ln { color: var(--cn-hi); text-decoration: underline; text-underline-offset: 2px; }
   .cn a.cn-go { color: inherit; text-decoration: none; }
-  .cn a.cn-go:hover b { color: #e8a24c; }
+  .cn a.cn-go:hover b { color: var(--cn-hi); }
   .cn a.cn-btn { text-decoration: none; display: inline-block; }
   /* A den's own custom layout can restyle every link on the page; Canto's links keep Canto's look. */
   .cn a { letter-spacing: normal !important; text-transform: none !important; font-family: var(--cn-body) !important; text-shadow: none !important; }
   .cn a.cn-btn { color: var(--cn-text) !important; } .cn a.cn-btn.on { color: var(--cn-on-ember) !important; }
   .cn a.cn-go, .cn a.cn-go b { color: var(--cn-head) !important; } .cn a.cn-go .cn-m { color: var(--cn-soft) !important; }
-  .cn a.cn-go:hover b { color: #e8a24c !important; }
+  .cn a.cn-go:hover b { color: var(--cn-hi) !important; }
   .cn-sof { display: flex; gap: 10px; align-items: center; } .cn-sof > div { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; }
   .cn-foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 7px 12px; border-top: 1px solid var(--cn-line); background: rgba(0,0,0,.14); font-size: 11.5px; color: var(--cn-soft); flex: none; }
   .cn .cn-foot a.cn-btn { padding: 2px 8px; font-size: 11.5px; text-decoration: none; }
@@ -800,11 +834,13 @@
   .cn-ring::before, .cn-ring::after { pointer-events: none; }
   html[data-cn-den="ring"] .cn-ring::before { content: ''; position: absolute; inset: calc(var(--cn-th, 6px) * -1); border-radius: calc(var(--cn-th, 6px) + 5px); z-index: -1;
     background: linear-gradient(rgba(0,0,0,var(--cn-dk, 0)), rgba(0,0,0,var(--cn-dk, 0))), var(--cn-ring);
-    box-shadow: 0 0 var(--cn-gl, 14px) var(--cn-glow), 0 0 calc(var(--cn-gl, 14px) / 3) var(--cn-glow); }
+    box-shadow: var(--cn-nest, 0 0 0 0 transparent), 0 0 var(--cn-gl, 14px) var(--cn-glow), 0 0 calc(var(--cn-gl, 14px) / 3) var(--cn-glow); }
   html[data-cn-den="name"] .cn-ring a[href*="/wolf/"] > div:first-child { background: linear-gradient(rgba(0,0,0,var(--cn-dk, 0)), rgba(0,0,0,var(--cn-dk, 0))), var(--cn-ring) !important; color: #14110d !important; }
   html[data-cn-den="name"] .cn-ring a[href*="/wolf/"] > div:first-child * { color: #14110d !important; text-shadow: 0 1px 0 rgba(255,255,255,.3); }
+  /* Stripe: a band of the line's colour under the picture, so neither hides the other */
   html[data-cn-den="stripe"] .cn-ring a[href*="/wolf/"] { display: block; position: relative; }
-  html[data-cn-den="stripe"] .cn-ring a[href*="/wolf/"]::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: var(--cn-th, 6px); border-radius: 0 0 4px 4px;
+  html[data-cn-den="stripe"] .cn-ring a[href*="/wolf/"] img { display: block; margin: 0 auto; border-bottom-left-radius: 0 !important; border-bottom-right-radius: 0 !important; }
+  html[data-cn-den="stripe"] .cn-ring a[href*="/wolf/"]::after { content: ''; display: block; position: static; height: var(--cn-th, 6px); border-radius: 0 0 4px 4px;
     background: linear-gradient(rgba(0,0,0,var(--cn-dk, 0)), rgba(0,0,0,var(--cn-dk, 0))), var(--cn-ring); }
   html[data-cn-den="corner"] .cn-ring::after { content: ''; position: absolute; left: 0; top: 0; z-index: 2; width: 0; height: 0; border-style: solid; border-top-left-radius: 5px;
     border-width: calc(var(--cn-th, 6px) * 3) calc(var(--cn-th, 6px) * 3) 0 0; border-color: var(--cn-c1) transparent transparent transparent; opacity: calc(1 - var(--cn-dk, 0)); }
@@ -858,7 +894,7 @@
   .cn-empty > b { font: 700 17px var(--cn-disp); color: var(--cn-head); display: block; }
   .cn-empty .cn-m { margin: 6px 0 4px; }
   .cn-nudge { background: var(--cn-in); border: 1px solid var(--cn-edge); border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
-  .cn-qg { font: 700 13px var(--cn-disp); color: #f0b48f; margin: 8px 0 3px; }
+  .cn-qg { font: 700 13px var(--cn-disp); color: var(--cn-hi2); margin: 8px 0 3px; }
   .cn-q { display: flex; justify-content: space-between; gap: 8px; width: 100%; text-align: left; font: 12.5px var(--cn-body); color: var(--cn-text); padding: 3px 8px; border-radius: 5px; background: #2f261b; border: 1px solid var(--cn-line); margin: 3px 0; cursor: pointer; }
   .cn-q:hover { border-color: var(--cn-ember); } .cn-q i { color: var(--cn-soft); font-style: normal; }
   .cn-prev { display: block; width: 100%; max-height: 120px; object-fit: cover; border-radius: 6px; margin: 6px 0; border: 1px solid var(--cn-edge); }
@@ -872,8 +908,8 @@
   .cn-tpg .cn-m { margin-left: auto; font-size: 11.5px; }
   .cn-tpg.in { padding-left: 22px; } .cn-tpg.in .cn-tt { font-weight: 400; }
   .cn-tpg.empty { opacity: .6; }
-  .cn-tpg:hover .cn-tt { color: #e8a24c; }
-  .cn-tpg.on { background: rgba(219,95,40,.16); border-radius: 6px; }
+  .cn-tpg:hover .cn-tt { color: var(--cn-hi); }
+  .cn-tpg.on { background: color-mix(in srgb, var(--cn-ember) 16%, transparent); border-radius: 6px; }
   .cn-tpg .cn-dot { width: 9px; height: 9px; }
   .cn-tfold { display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--cn-line); }
   .cn-tfh { display: flex; align-items: center; gap: 7px; flex: 1; padding: 8px 2px; background: none; border: 0; color: var(--cn-head); font: 600 13.5px var(--cn-body); cursor: pointer; text-align: left; }
@@ -895,7 +931,7 @@
   .cn-subs .cn-chev { margin-left: 0; }
   .cn-subs .cn-ht { flex: 1; }
   .cn-ev { justify-content: flex-start !important; gap: 10px; }
-  .cn-ed2 { width: 52px; flex: none; text-align: center; font: 700 12px/1.1 var(--cn-body); color: #f0b48f; }
+  .cn-ed2 { width: 52px; flex: none; text-align: center; font: 700 12px/1.1 var(--cn-body); color: var(--cn-hi2); }
   .cn-ed2 small { display: block; font-weight: 400; font-size: 10.5px; color: var(--cn-soft); }
   .cn-etag { margin-left: auto; font: 700 9.5px var(--cn-body); letter-spacing: .05em; text-transform: uppercase; border-radius: 4px; padding: 1px 6px; white-space: nowrap; background: #3a2f22; color: #e6dacb; }
   .cn-etag.t-festival { background: #db5f28; color: #fff6ee; } .cn-etag.t-holiday { background: #4a3a22; color: #e8a24c; }
@@ -903,12 +939,12 @@
   .cn-etag.t-birth { background: #3d2a33; color: #e6a9c3; } .cn-etag.t-death { background: #2e2c33; color: #b9b3c9; }
   .cn-etag.t-anniversary { background: #3a3a22; color: #d9cf8a; }
   .cn-etag.t-wolfday { background: #2c3a2a; color: #b5d3a1; }
-  .cn-lk { border-bottom: 1.5px dotted #f0b48f; color: var(--cn-head); cursor: help; }
+  .cn-lk { border-bottom: 1.5px dotted var(--cn-hi2); color: var(--cn-head); cursor: help; }
   .cn-lk.k-wolf { border-bottom-color: #8fb4e6; }
   .cn-lk.k-line { border-bottom-color: var(--lk, #e85c9a); }
-  .cn-lk:focus-visible { outline: 2px solid #6fa3b0; outline-offset: 1px; border-radius: 2px; }
+  .cn-lk:focus-visible { outline: 2px solid var(--cn-help); outline-offset: 1px; border-radius: 2px; }
   .cn-lopts .cn-lk { cursor: default; }
-  .cn-lpop { position: fixed; z-index: 2147483600; background: #3a2f22; border: 1px solid #6b583f; border-radius: 8px; padding: 8px 10px; box-shadow: 0 8px 20px rgba(0,0,0,.45); font: 12.5px/1.5 var(--cn-body); color: var(--cn-text); }
+  .cn-lpop { position: fixed; z-index: 2147483600; background: var(--cn-card); border: 1px solid var(--cn-edge); border-radius: 8px; padding: 8px 10px; box-shadow: 0 8px 20px rgba(0,0,0,.45); font: 12.5px/1.5 var(--cn-body); color: var(--cn-text); }
   .cn-lpop .cn-lph { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
   .cn-lpop .cn-lph b { font: 700 15px var(--cn-disp); color: var(--cn-head); }
   .cn-lpop p { margin: 3px 0 5px; }
@@ -917,8 +953,8 @@
   .cn-chip .cn-ntag { margin-left: 2px; }
   .cn-sorts { flex-wrap: wrap; margin-bottom: 2px; }
   .cn-nform { display: flex; flex-direction: column; align-items: stretch; gap: 5px; }
-  .cn-sky-note { background: rgba(111,163,176,.10); border-color: #3f5a60; color: #cfe3e8; }
-  .cn-grip { color: #7d6c55; font-size: 12px; letter-spacing: -2px; cursor: grab; width: 10px; flex: none; opacity: 0; }
+  .cn-sky-note { background: color-mix(in srgb, var(--cn-help) 10%, transparent); border-color: var(--cn-help-edge); color: var(--cn-help-text); }
+  .cn-grip { color: var(--cn-soft); font-size: 12px; letter-spacing: -2px; cursor: grab; width: 10px; flex: none; opacity: 0; }
   .cn-tpg:hover .cn-grip, .cn-tfold:hover .cn-grip { opacity: 1; }
   @media (hover: none) { .cn-grip { display: none; } }
   .cn-dragging { opacity: .5; }
@@ -949,8 +985,17 @@
   .cn-prevs i { width: 30px; height: 16px; border-radius: 4px; display: inline-block; }
   .cn-wl { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 12.5px; padding: 0 0 6px 34px; }
   .cn .cn-wl a.cn-go { font: 12.5px var(--cn-body); letter-spacing: normal; color: var(--cn-text) !important; text-decoration: none; text-transform: none; }
-  .cn .cn-wl a.cn-go:hover { color: #e8a24c !important; }
-  .cn-out { font: 600 10px var(--cn-body); letter-spacing: .05em; text-transform: uppercase; color: #f0b48f; border: 1px solid #8a4a2a; border-radius: 4px; padding: 0 5px; margin-left: 4px; }
+  .cn .cn-wl a.cn-go:hover { color: var(--cn-hi) !important; }
+  .cn-out { font: 600 10px var(--cn-body); letter-spacing: .05em; text-transform: uppercase; color: var(--cn-hi2); border: 1px solid #8a4a2a; border-radius: 4px; padding: 0 5px; margin-left: 4px; }
+  .cn-subtag { position: absolute; left: 0; right: 0; top: 3px; text-align: center; font: 600 10px/1.2 var(--cn-body, system-ui); color: #eee; text-shadow: 0 1px 2px rgba(0,0,0,.8); pointer-events: none; z-index: 3; }
+  .cn-subtag i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 3px; vertical-align: 0; box-shadow: 0 0 0 1px rgba(255,255,255,.5); }
+  .cn-subdots { position: absolute; right: 5px; top: 5px; display: flex; gap: 3px; pointer-events: none; z-index: 3; }
+  .cn-subdots i { width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 0 1px rgba(0,0,0,.45); }
+  .cn-tchips { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 2px 0 6px; }
+  .cn-tc { display: flex; align-items: center; gap: 6px; padding: 5px 7px; border: 1px solid var(--cn-edge); border-radius: 8px; background: var(--cn-card); color: var(--cn-head); font: 600 12px var(--cn-body); cursor: pointer; text-align: left; }
+  .cn-tc.on { border-color: var(--cn-ember); box-shadow: inset 0 0 0 1px var(--cn-ember); }
+  .cn-tc .cn-sws { display: flex; gap: 2px; } .cn-tc .cn-sws i { width: 9px; height: 14px; border-radius: 2px; display: block; box-shadow: 0 0 0 1px rgba(0,0,0,.25); }
+  .cn-lindent { color: var(--cn-soft); margin-right: -2px; }
   `;
 
   // ================================================================ word marking
@@ -1184,6 +1229,7 @@
   }
 
   function render() {
+    applyLook();
     if (taleEdit && taleEdit.where === 'hub') flushTale();
     const keepScroll = hub.querySelector('.cn-scroll') ? hub.querySelector('.cn-scroll').scrollTop : 0;
     hub.textContent = '';
@@ -1684,12 +1730,14 @@
   const wolvesText = (n) => `${n} wol${n === 1 ? 'f' : 'ves'}`;
   // "12 wolves · 3 remembered": the living, and those who have died (from the Pack Dynasty).
   function lineCount(L, n) {
-    const dead = deadIds(L), ids = Object.entries(L.wolves).filter(([, w]) => key(w.line) === key(n) || projOf(w).some((p) => key(p) === key(n))).map(([id]) => id);
+    const sub = under(L, n);
+    const dead = deadIds(L), ids = Object.entries(L.wolves).filter(([, w]) => sub.has(key(w.line)) || projOf(w).some((p) => key(p) === key(n))).map(([id]) => id);
     const gone = ids.filter((id) => dead.has(id)).length;
     return wolvesText(ids.length - gone) + (gone && dynOpts().show ? ` · ${gone} remembered` : '');
   }
-  function countWolves(L, n) { return Object.values(L.wolves).filter((w) => key(w.line) === key(n) || projOf(w).some((p) => key(p) === key(n))).length; }
+  function countWolves(L, n) { const sub = under(L, n); return Object.values(L.wolves).filter((w) => sub.has(key(w.line)) || projOf(w).some((p) => key(p) === key(n))).length; }
   function renameLine(L, from, to) {
+    for (const l of L.lines) if (key(l.p) === key(from)) l.p = to;
     for (const w of Object.values(L.wolves)) {
       if (key(w.line) === key(from)) w.line = to;
       if (w.proj) w.proj = w.proj.map((p) => (key(p) === key(from) ? to : p));
@@ -1728,10 +1776,11 @@
           onclick: () => { save('hintLines', true); render(); } })));
     }
     const lines = h('div', { class: 'cn-list' });
-    for (const l of L.lines) {
+    for (const l of treeLines(L)) {
       if (bloodEdit === l) { lines.append(lineForm(L, l)); continue; }
-      lines.append(h('div', { class: 'cn-row', style: 'cursor:pointer', title: 'Edit', onclick: () => { bloodEdit = l; render(); } },
-        h('span', { class: 'cn-row l', style: 'padding:0' }, h('i', { class: 'cn-sw', style: 'background:' + l.c }), h('b', { class: 'cn-strong', text: l.n }),
+      const dp = isBlood(l) ? lineDepth(L, l.n) : 0;
+      lines.append(h('div', { class: 'cn-row', style: 'cursor:pointer' + (dp ? `;padding-left:${dp * 18}px` : ''), title: 'Edit', onclick: () => { bloodEdit = l; render(); } },
+        h('span', { class: 'cn-row l', style: 'padding:0' }, dp ? h('span', { class: 'cn-lindent', text: '└' }) : null, h('i', { class: 'cn-sw', style: 'background:' + l.c }), h('b', { class: 'cn-strong', text: l.n }),
           l.k === 'p' ? h('span', { class: 'cn-kind p', text: 'project' }) : l.k === 'bp' ? h('span', { class: 'cn-kind', text: 'bloodline + project' }) : null),
         h('span', { class: 'cn-m' }, lineCount(L, l.n), isBlood(l) ? [' · ', taleLink(L, l.n)] : null)));
     }
@@ -1910,6 +1959,10 @@
       h('div', { class: 'cn-lb', text: 'Dot beside a line’s name' }),
       h('div', { class: 'cn-chips' }, ...[['dot', 'Dot'], ['small', 'Small dot'], ['bar', 'Thin bar'], ['none', 'None']].map(([v, t]) =>
         h('span', { class: 'cn-chip' + (d.dot === v ? ' on' : ''), text: t, onclick: () => set({ dot: v }, true) }))),
+      lore() && lore().lines.some((x) => parentOf(lore(), x.n)) ? [h('div', { class: 'cn-lb', text: 'Sub-lines show as' }),
+        h('div', { class: 'cn-chips' }, ...[['nest', 'Nested rings'], ['fade', 'Fade down'], ['stripe', 'Stripes'], ['tag', 'Own colour + tag'], ['dots', 'Parent ring + dots']].map(([v, t]) =>
+          h('span', { class: 'cn-chip' + ((d.sub || 'nest') === v ? ' on' : ''), text: t, onclick: () => set({ sub: v }, true) }))),
+        h('div', { class: 'cn-m', text: 'Nested rings and the fade show best with Glow, Soft or Thin edge.' })] : null,
       h('div', { class: 'cn-lb', text: 'When you pick a line in the Show bar' }),
       slider('Fade others', 'fade', 20, 90, (v) => v + '%'),
       h('label', { class: 'cn-row l', style: 'cursor:pointer' }, tick, 'Only show lines while one is picked'),
@@ -1921,6 +1974,12 @@
     if (!l) setTimeout(() => queueWalk('line'), 200);
     const m = h('input', { class: 'cn-in', value: l ? l.meaning : '', placeholder: 'optional' });
     let kind = l ? l.k || 'b' : 'b';
+    // A bloodline can sit under another, as long as that's no deeper than two and isn't one of its own sub-lines.
+    const mine = l ? under(L, l.n) : new Set();
+    const depthBelow = l ? Math.max(0, ...[...mine].map((k) => lineDepth(L, k) - lineDepth(L, l.n))) : 0;
+    const partSel = h('select', { class: 'cn-in' }, h('option', { value: '', text: 'none' }),
+      ...treeLines(L).filter((x) => isBlood(x) && !mine.has(key(x.n)) && lineDepth(L, x.n) + 1 + depthBelow <= 2)
+        .map((x) => h('option', { value: x.n, text: linePath(L, x.n).join(' › '), selected: l && key(l.p) === key(x.n) })));
     const kinds = h('span', { class: 'cn-seg', 'data-walk': 'line-kind' });
     const drawKinds = () => { kinds.textContent = ''; kinds.append(...[['b', 'Bloodline'], ['p', 'Project'], ['bp', 'Both']].map(([v, t]) =>
       h('button', { type: 'button', class: v === kind ? 'on' : '', text: t, onclick: () => { kind = v; drawKinds(); } }))); };
@@ -1929,17 +1988,23 @@
       colourCheck(c), h('span', { class: 'cn-m', text: 'Kind' }), kinds,
       h('div', { class: 'cn-m', style: 'grid-column:1/-1', text: 'Bloodline: your lore, with families, Tales and the wolf card. Project: a breeding group to light up on your den, with no families or lore. Both: a bloodline you’re also breeding for.' }),
       h('span', { class: 'cn-m', text: 'Meaning' }), m,
+      h('span', { class: 'cn-m', text: 'Part of' }), partSel,
+      h('div', { class: 'cn-m', style: 'grid-column:1/-1', text: 'A sub-line is a smaller branch of a bloodline, up to three levels. Its wolves count in the lines above it.' }),
       h('div', { class: 'cn-btns' }, h('button', { class: 'cn-btn on', type: 'button', text: 'Save', onclick: () => {
-        const name = n.value.trim(); if (!name) return;
+        const name = oneLine(n.value).replace(/[›>:]/g, ' ').trim(); if (!name) return;
+        // Every line and family needs a name of its own, so a wolf's line is never in doubt.
+        if ([...L.lines, ...L.families].some((x) => x !== l && key(x.n) === key(name))) { alert(`There’s already a line or family called “${name}”. Pick another name.`); return; }
+        const p = kind === 'p' ? '' : partSel.value;
         if (l) {
           if (l.n !== name) renameLine(L, l.n, name);
-          Object.assign(l, { n: name, c: c.value, meaning: m.value.trim(), k: kind });
+          Object.assign(l, { n: name, c: c.value, meaning: m.value.trim(), k: kind, p });
           moveKind(L, l);
-        } else L.lines.push({ n: name, c: c.value, meaning: m.value.trim(), k: kind });
+        } else L.lines.push({ n: name, c: c.value, meaning: m.value.trim(), k: kind, p });
         bloodEdit = null; changed();
       } }), h('button', { class: 'cn-btn', type: 'button', text: 'Cancel', onclick: () => { bloodEdit = null; render(); } }),
       l ? h('button', { class: 'cn-btn', type: 'button', text: 'Remove', style: 'margin-left:auto', onclick: () => {
         if (!removeLine(L, l.n)) return;
+        for (const x of L.lines) if (key(x.p) === key(l.n)) x.p = l.p || '';   // its sub-lines move up a level
         L.lines.splice(L.lines.indexOf(l), 1); bloodEdit = null; changed();
       } }) : null));
   }
@@ -1998,7 +2063,7 @@
   // "its tale" beside a line or family: opens its page in Tales, or starts one.
   function taleLink(L, n) {
     const has = L.tales.some((p) => key(p.t) === key(n) && p.md.trim());
-    return h('button', { class: 'cn-a', type: 'button', text: has ? 'its tale' : 'write its tale', style: has ? 'color:#e8a24c' : '',
+    return h('button', { class: 'cn-a', type: 'button', text: has ? 'its tale' : 'write its tale', style: has ? 'color:var(--cn-hi)' : '',
       onclick: (e) => { e.stopPropagation(); openTale(n); } });
   }
   // Twill's Tray: wolf IDs Twill keeps (denkit:tray), named from Twill's own collection. Canto only reads them.
@@ -2056,13 +2121,14 @@
     const dead = deadIds(L), showGone = dynOpts().show;
     const didOf = Object.fromEntries(deadWolves(L).filter((x) => x.id).map((x) => [x.id, x.did]));
     const list = h('div', {});
-    for (const x of [...L.lines, ...L.families]) {
+    for (const x of [...treeLines(L), ...L.families]) {
       const blood = !lineOf(L, x.n) || isBlood(x), proj = lineOf(L, x.n) && isProj(x);
+      const dp = lineOf(L, x.n) && blood ? lineDepth(L, x.n) : 0;
       const all = Object.entries(L.wolves).filter(([, w]) => (blood && key(w.line) === key(x.n)) || (proj && projOf(w).some((p) => key(p) === key(x.n))));
       // Wolves who have died follow the living, remembered, unless switched off.
       const living = all.filter(([id]) => !dead.has(id)), gone = showGone ? all.filter(([id]) => dead.has(id)) : [];
       if (!living.length && !gone.length) continue;
-      list.append(h('div', { class: 'cn-row', style: 'padding-bottom:0' }, h('span', { class: 'cn-row l', style: 'padding:0' }, h('i', { class: 'cn-sw', style: 'background:' + ring(colours(L, x.n)) }),
+      list.append(h('div', { class: 'cn-row', style: 'padding-bottom:0' + (dp ? `;padding-left:${dp * 18}px` : '') }, h('span', { class: 'cn-row l', style: 'padding:0' }, dp ? h('span', { class: 'cn-lindent', text: '└' }) : null, h('i', { class: 'cn-sw', style: 'background:' + ring(colours(L, x.n)) }),
         h('b', { class: 'cn-strong', text: x.n }), lineOf(L, x.n) && x.k === 'p' ? h('span', { class: 'cn-kind p', text: 'project' }) : null), h('span', { class: 'cn-m', text: living.length + (gone.length ? ' + ' + gone.length : '') })),
       h('div', { class: 'cn-wl' }, ...living.map(([id, w]) => link(id, w.n)), ...gone.map(([id, w]) => { const a = link(id, w.n); a.href = '/dynasty/wolf/' + didOf[id]; a.classList.add('gone'); a.title = 'Remembered'; return a; })));
     }
@@ -2274,6 +2340,7 @@
       const row = h('div', { role: 'button', tabindex: '0', class: 'cn-tpg' + (inFolder ? ' in' : '') + (n || p.kind === 'pack' ? '' : ' empty') + (here ? ' on' : ''), onclick: () => pick(p.t),
         onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(p.t); } } },
         own ? h('span', { class: 'cn-grip', 'aria-hidden': 'true', text: '⋮⋮' }) : null,
+        p.kind === 'line' && lineOf(L, p.t) && lineDepth(L, p.t) ? h('span', { style: `width:${lineDepth(L, p.t) * 16}px;flex:none` }) : null,
         p.kind === 'line' ? dot(L, p.t) : null, h('span', { class: 'cn-tt', text: p.t }), h('span', { class: 'cn-m', text: n ? `${n} word${n === 1 ? '' : 's'}` : p.kind === 'pack' ? '' : 'not yet' }),
         own && taleOrder ? arrows(at > 0 && (() => stepPage(L, p.t, -1)), at < sib.length - 1 && (() => stepPage(L, p.t, 1))) : null);
       if (own) {
@@ -2376,14 +2443,14 @@
         linkLore(read, L);
         for (const f of read.querySelectorAll('figure')) f.addEventListener('click', () => f.classList.toggle('big'));
         main.append(read, h('div', { class: 'cn-btns' }, h('button', { class: 'cn-btn on', type: 'button', text: 'Edit', onclick: () => startEdit(where) }),
-          h('button', { class: 'cn-btn', type: 'button', text: '✦ nudge', style: 'border-color:var(--cn-ember);color:#f0b48f', onclick: () => { taleNudge = !taleNudge; refreshTales(); } }),
+          h('button', { class: 'cn-btn', type: 'button', text: '✦ nudge', style: 'border-color:var(--cn-ember);color:var(--cn-hi2)', onclick: () => { taleNudge = !taleNudge; refreshTales(); } }),
           h('span', { class: 'cn-m', style: 'margin-left:auto', text: `${words} word${words === 1 ? '' : 's'}` })));
       } else {
         main.append(h('div', { class: 'cn-empty' },
           h('b', { text: meta.kind === 'pack' ? 'Every pack has its tales' : meta.kind === 'line' ? `${page.t} has no tale yet` : page.t }),
           h('div', { class: 'cn-m', text: meta.kind === 'pack' ? 'This is where yours go. Write as much or as little as you like.' : 'Write as much or as little as you like.' }),
           h('div', { class: 'cn-btns', style: 'justify-content:center' }, h('button', { class: 'cn-btn on', type: 'button', text: 'Start writing', onclick: () => startEdit(where) }),
-            h('button', { class: 'cn-btn', type: 'button', text: '✦ Give me a nudge', style: 'border-color:var(--cn-ember);color:#f0b48f', onclick: () => { taleNudge = !taleNudge; refreshTales(); } }))));
+            h('button', { class: 'cn-btn', type: 'button', text: '✦ Give me a nudge', style: 'border-color:var(--cn-ember);color:var(--cn-hi2)', onclick: () => { taleNudge = !taleNudge; refreshTales(); } }))));
       }
       if (taleNudge) main.append(nudgeBox(L, page, meta, where));
       // Your own pages can be filed into a folder.
@@ -2471,6 +2538,7 @@
         const l = term.l, n = Object.values(L.wolves).filter((w) => key(w.line) === key(l.n)).length;
         const told = taleOf(L, l.n) && taleOf(L, l.n).md.trim();
         add(h('div', { class: 'cn-lph' }, h('span', {}, dot(L, l.n), ' ', h('b', { text: l.n })), h('span', { class: 'cn-m', text: `${n} wol${n === 1 ? 'f' : 'ves'}` })),
+          parentOf(L, l.n) ? h('div', { class: 'cn-m', text: 'part of ' + linePath(L, l.n).slice(0, -1).join(' › ') }) : null,
           l.meaning ? h('p', { text: l.meaning }) : l.a ? h('p', { text: `a family of ${l.a} and ${l.b}` }) : null,
           told ? h('button', { class: 'cn-a', type: 'button', text: `read ${l.n}’s tale`, onclick: () => { closeLink(); openTale(l.n); } }) : null);
       }
@@ -2564,7 +2632,7 @@
         const t = String(getSelection()).trim(); if (!t || /[\[\]\n]/.test(t)) return;
         document.execCommand('insertText', false, `[[${t}]]`); keep();
       }) : null,
-      tb('✦ need a nudge?', 'Need a nudge?', () => { keep(); nudge.textContent = ''; nudge.append(nudgeBox(L, page, meta, where)); }, 'margin-left:auto;border-color:var(--cn-ember);color:#f0b48f'));
+      tb('✦ need a nudge?', 'Need a nudge?', () => { keep(); nudge.textContent = ''; nudge.append(nudgeBox(L, page, meta, where)); }, 'margin-left:auto;border-color:var(--cn-ember);color:var(--cn-hi2)'));
     bar.lastChild.setAttribute('data-walk', 'tale-nudge');
     const done = () => { keep(); if (taleMarkOff) taleMarkOff(); taleEdit = null; refreshTales(); };
     const own = meta.kind === 'own';
@@ -2892,18 +2960,133 @@
           h('div', { class: 'cn-m', text: 'Paste these under the same headings in your file, or save a fresh copy of the whole file above.' }));
       } else box.append(h('div', { class: 'cn-m', text: 'Nothing new. Your file and Canto agree.' }));
     }
-    box.append(h('div', { class: 'cn-lb', text: 'Look' }));
-    const look = load('look', 'canto');
-    for (const [v, label] of [['canto', 'Canto’s own look'], ['twill', 'Follow Twill']]) {
-      const r = h('input', { type: 'radio', name: 'cn-look', checked: look === v });
-      r.addEventListener('change', () => { save('look', v); applyLook(); render(); });
-      box.append(h('label', { class: 'cn-row l', style: 'cursor:pointer' }, r, label));
-    }
+    lookBox(box, L);
     box.append(h('div', { class: 'cn-m', style: 'margin-top:10px', text: `Canto ${SHOWN_VERSION}. Your lore stays in this browser and in the files you save.` }));
   }
+  /* Pack colours. Each theme is a few colours; the rest are mixed from them. The "?" always has a
+     colour of its own that answers the theme. Saved in the pack's lore file ("## Canto",
+     "Colours: Sea"), unless the player keeps their own colours for every pack. */
+  const THEMES = {
+    ember: { name: 'Ember' },
+    sea: { name: 'Sea', panel: '#1c2a26', head: ['#26392f', '#1f2f29'], edge: '#3b5249', acc: '#3f9c86', text: '#dbe6dc', strong: '#f1f6ee', soft: '#a9bba9', help: '#ef9a7c',
+      acc2: '#9a6cc0', save: '#8a5fb0', headline: 'linear-gradient(90deg, #3f9c86 70%, #9a6cc0 70%)' },
+    moss: { name: 'Moss', panel: '#252a1d', head: ['#333a26', '#2b301f'], edge: '#4a5236', acc: '#7aa35a', text: '#e0e6d2', strong: '#f2f6ea', soft: '#adb895', help: '#d892b4',
+      acc2: '#8a6542', save: '#6b4f33' },
+    ash: { name: 'Ash', panel: '#1c1c1d', head: ['#2b2b2c', '#212122'], edge: '#3c3c3e', acc: '#8c8782', text: '#d8d6d3', strong: '#f0efed', soft: '#9b9893', help: '#e8a95c',
+      save: '#7a1f26', tab: '#7a1f26', headline: 'linear-gradient(#7a1f26, #7a1f26)' },
+    snow: { name: 'Snow', light: true, panel: '#f2f0eb', head: ['#fbfaf7', '#e9e5de'], edge: '#d4cec4', acc: '#94545a', text: '#3a3430', strong: '#1f1b18', soft: '#6e665d', help: '#3f6f8f',
+      acc2: '#76866f', save: '#76866f' },
+    sky: { name: 'Sky', panel: '#262a2f', head: ['#323840', '#2a2f35'], edge: '#454d57', acc: '#6f8296', text: '#d6dbe0', strong: '#eef1f4', soft: '#9ea7b1', help: '#eaa982' },
+    sun: { name: 'Sun', panel: '#2d2312', head: ['#3e3019', '#322714'], edge: '#5e4823', acc: '#d99a22', onAcc: '#2a1c08', text: '#efe2c6', strong: '#fcf1d8', soft: '#c9b07c', help: '#7aa6ea',
+      acc2: '#f0c463', save: '#b26e17', saveOn: '#fff6e6' },
+  };
+  const hexRgb = (x) => { const v = (hexColour(x) || '#000000').slice(1); return [0, 2, 4].map((i) => parseInt(v.slice(i, i + 2), 16)); };
+  const rgbHex = (c) => '#' + c.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
+  const mix = (a, b, t) => { const x = hexRgb(a), y = hexRgb(b); return rgbHex(x.map((v, i) => v + (y[i] - v) * t)); };
+  const lum = (x) => { const [r, g, b] = hexRgb(x).map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+  // The colour that answers another: the opposite hue, kept light enough to read.
+  function answer(x, light) {
+    let [r, g, b] = hexRgb(x).map((v) => v / 255);
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b); let hh = 0; const l = (mx + mn) / 2, d = mx - mn;
+    if (d) hh = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    hh = (hh * 60 + 180 + 360) % 360;
+    const L2 = light ? 0.38 : 0.7, S2 = 0.45, C = (1 - Math.abs(2 * L2 - 1)) * S2, X = C * (1 - Math.abs(((hh / 60) % 2) - 1)), m = L2 - C / 2;
+    [r, g, b] = hh < 60 ? [C, X, 0] : hh < 120 ? [X, C, 0] : hh < 180 ? [0, C, X] : hh < 240 ? [0, X, C] : hh < 300 ? [X, 0, C] : [C, 0, X];
+    return rgbHex([r, g, b].map((v) => (v + m) * 255));
+  }
+  // "Sea", "line Rose" or "#e85c9a on #241c22", turned into a theme
+  function themeFor(v, L) {
+    const k = key(v || 'ember');
+    if (THEMES[k]) return THEMES[k];
+    let acc = null, bg = null, m;
+    if ((m = /^line\s+(.+)$/i.exec(v || '')) && L && lineOf(L, m[1].trim())) { acc = lineOf(L, m[1].trim()).c; bg = mix(acc, '#14110d', 0.86); }
+    else if ((m = /^(#[0-9a-f]{3,8})\s+on\s+(#[0-9a-f]{3,8})$/i.exec(v || ''))) { acc = hexColour(m[1]); bg = hexColour(m[2]); }
+    if (!acc) return THEMES.ember;
+    const light = lum(bg) > 0.4;
+    const text = light ? '#2e2a26' : '#e6e0d6';
+    return { name: 'own', light, panel: bg, head: [mix(bg, light ? '#ffffff' : acc, 0.12), mix(bg, light ? '#000000' : '#000000', 0.06)], edge: mix(bg, text, 0.28), acc,
+      onAcc: lum(acc) > 0.45 ? '#1f1b18' : '#fffaf4', text, strong: light ? '#14110d' : '#f7f2ea', soft: mix(text, bg, 0.35), help: answer(acc, light) };
+  }
+  function themeVars(t) {
+    if (!t.panel) return '';
+    const dark = !t.light, acc = t.acc, help = t.help;
+    const v = {
+      '--cn-panel': t.panel, '--cn-card': mix(t.panel, t.text, 0.08), '--cn-raise': mix(t.panel, t.text, 0.14), '--cn-edge': t.edge, '--cn-line': mix(t.edge, t.panel, 0.35),
+      '--cn-text': t.text, '--cn-soft': t.soft, '--cn-head': t.strong, '--cn-headbg': `linear-gradient(180deg, ${t.head[0]}, ${t.head[1]})`,
+      '--cn-ember': acc, '--cn-on-ember': t.onAcc || (lum(acc) > 0.5 ? '#1f1b18' : '#fff8f0'), '--cn-in': dark ? mix(t.panel, '#000000', 0.22) : '#ffffff',
+      '--cn-hi': dark ? mix(acc, '#ffe2a8', 0.35) : mix(acc, '#000000', 0.2), '--cn-hi2': dark ? mix(acc, '#ffffff', 0.45) : mix(acc, '#000000', 0.25),
+      '--cn-ico-a': mix(acc, t.panel, 0.6), '--cn-ico-b': mix(t.panel, '#000000', dark ? 0.1 : 0.02), '--cn-ico-edge': mix(acc, t.panel, 0.35), '--cn-ico-c': dark ? mix(acc, '#ffffff', 0.25) : mix(acc, '#000000', 0.1),
+      '--cn-help': help, '--cn-help-hi': dark ? mix(help, '#ffffff', 0.2) : mix(help, '#000000', 0.1), '--cn-help-text': dark ? mix(help, '#ffffff', 0.62) : mix(help, '#000000', 0.45),
+      '--cn-help-soft': mix(help, t.text, 0.45), '--cn-help-edge': mix(help, t.panel, 0.55), '--cn-help-bg': mix(t.panel, help, 0.12), '--cn-help-on': dark ? '#1a1612' : '#ffffff',
+    };
+    if (t.acc2) Object.assign(v, { '--cn-ico2-a': mix(t.acc2, t.panel, 0.6), '--cn-ico2-edge': mix(t.acc2, t.panel, 0.35), '--cn-ico2-c': dark ? mix(t.acc2, '#ffffff', 0.25) : mix(t.acc2, '#000000', 0.1) });
+    if (t.save) Object.assign(v, { '--cn-save': t.save, '--cn-save-on': t.saveOn || (lum(t.save) > 0.5 ? '#1f1b18' : '#fff8f0') });
+    if (t.tab) v['--cn-tabon'] = t.tab;
+    if (t.headline) v['--cn-headline'] = t.headline;
+    return Object.entries(v).map(([k, x]) => `${k}: ${x};`).join(' ');
+  }
+  const lookMine = () => Object.assign({ on: false, v: 'ember' }, load('lookMine', {}));
+  const lookNow = () => { const m = lookMine(); const L = lore(); return m.on ? m.v : (L && L.look) || 'ember'; };
+  let lookCss = null;
   function applyLook() {
     if (load('look', 'canto') === 'twill') document.documentElement.setAttribute('data-cn-look', 'twill');
     else document.documentElement.removeAttribute('data-cn-look');
+    const t = themeFor(lookNow(), lore());
+    const css = t.panel ? `html:not([data-cn-look="twill"]) .cn.cn { ${themeVars(t)} }${t.light ? ' html:not([data-cn-look="twill"]) .cn.cn { color-scheme: light; }' : ''}` : '';
+    if (css === lookCss) return;
+    lookCss = css;
+    let el = document.getElementById('cn-theme');
+    if (!el) { el = h('style', { id: 'cn-theme' }); document.head.append(el); }
+    el.textContent = css;
+  }
+  // The picker, at the bottom of Files
+  let lookOpen = '';
+  function lookBox(box, L) {
+    box.append(h('div', { class: 'cn-lb', text: 'Look' }));
+    const twill = load('look', 'canto') === 'twill', mine = lookMine();
+    const now = lookNow();
+    const setLook = (v) => {
+      save('look', 'canto');
+      if (mine.on) save('lookMine', Object.assign(lookMine(), { v }));
+      else if (L) { L.look = key(v) === 'ember' ? '' : v; changed(); }
+      applyLook(); render();
+    };
+    const sw = (cols) => h('span', { class: 'cn-sws' }, ...cols.map((c) => h('i', { style: 'background:' + c })));
+    const chips = h('div', { class: 'cn-tchips' });
+    for (const [k, t] of Object.entries(THEMES)) {
+      const cols = k === 'ember' ? ['#2c241a', '#db5f28'] : [t.panel, t.acc, t.acc2].filter(Boolean);
+      chips.append(h('button', { type: 'button', class: 'cn-tc' + (!twill && key(now) === k ? ' on' : ''), onclick: () => { lookOpen = ''; setLook(t.name); } }, sw(cols), t.name));
+    }
+    const isLine = /^line\s/i.test(now), isOwn = /^#/.test(now);
+    chips.append(h('button', { type: 'button', class: 'cn-tc' + (!twill && isLine ? ' on' : ''), onclick: () => { lookOpen = lookOpen === 'line' ? '' : 'line'; render(); } },
+      sw([isLine && L && lineOf(L, now.slice(5)) ? lineOf(L, now.slice(5)).c : '#e85c9a']), 'From a line'));
+    chips.append(h('button', { type: 'button', class: 'cn-tc' + (!twill && isOwn ? ' on' : ''), onclick: () => { lookOpen = lookOpen === 'own' ? '' : 'own'; render(); } },
+      sw(['conic-gradient(#c44,#cc4,#4c4,#4cc,#44c,#c4c,#c44)']), 'Your own'));
+    box.append(chips);
+    if (lookOpen === 'line') {
+      const opts = L ? treeLines(L) : [];
+      box.append(h('div', { class: 'cn-chips', style: 'margin-bottom:6px' }, ...opts.map((x) => h('span', { class: 'cn-chip' + (isLine && key(now.slice(5)) === key(x.n) ? ' on' : ''), onclick: () => setLook('line ' + x.n) }, dot(L, x.n), x.n)),
+        opts.length ? null : h('span', { class: 'cn-m', text: 'Add a line first, under Bloodlines.' })));
+    }
+    if (lookOpen === 'own') {
+      const m = /^(#[0-9a-f]{3,8})\s+on\s+(#[0-9a-f]{3,8})$/i.exec(now) || [null, '#db5f28', '#2c241a'];
+      const ac = h('input', { class: 'cn-in', type: 'color', value: hexColour(m[1]) });
+      const bg = h('input', { class: 'cn-in', type: 'color', value: hexColour(m[2]) });
+      const warn = h('div', { class: 'cn-warn', hidden: true });
+      const check = () => { const r = contrast(ac.value, bg.value); warn.hidden = r >= 3; warn.textContent = r < 3 ? 'These two are close: buttons and the chosen tab may be hard to see. Try a lighter or darker accent.' : ''; };
+      ac.addEventListener('input', check); bg.addEventListener('input', check); check();
+      box.append(h('div', { class: 'cn-form' }, h('span', { class: 'cn-m', text: 'Accent' }), h('span', {}, ac), h('span', { class: 'cn-m', text: 'Background' }), h('span', {}, bg), h('div', { style: 'grid-column:1/-1' }, warn),
+        h('div', { class: 'cn-btns' }, h('button', { class: 'cn-btn on', type: 'button', text: 'Use these', onclick: () => setLook(`${ac.value} on ${bg.value}`) }),
+          h('button', { class: 'cn-btn', type: 'button', text: 'Cancel', onclick: () => { lookOpen = ''; render(); } }))));
+    }
+    const r = h('input', { type: 'radio', name: 'cn-look', checked: twill });
+    r.addEventListener('change', () => { save('look', 'twill'); applyLook(); render(); });
+    const mineTick = h('input', { type: 'checkbox', checked: mine.on });
+    mineTick.addEventListener('change', () => { save('lookMine', { on: mineTick.checked, v: mineTick.checked ? lookNow() : mine.v }); applyLook(); render(); });
+    box.append(h('label', { class: 'cn-row l', style: 'cursor:pointer' }, r, 'Follow Twill instead'),
+      h('label', { class: 'cn-row l', style: 'cursor:pointer' }, mineTick, 'Use my colours on every pack, not each file’s own'),
+      h('div', { class: 'cn-m', text: mine.on ? 'Your colours are kept in this browser and used for every pack.' : 'Saved in this pack’s lore file, so it looks the same on every computer.' }));
   }
 
   // ================================================================ the wolf's page
@@ -2930,7 +3113,7 @@
       const told = L.tales.some((p) => key(p.t) === key(w.line) && p.md.trim());
       box.append(h('div', { class: 'cn-row' }, h('span', { class: 'cn-row l', style: 'padding:0' }, linePill(L, w.line),
         gone ? h('span', { class: 'cn-mem' }, h('i'), 'remembered') : null,
-        told ? h('button', { class: 'cn-a', type: 'button', text: `read ${w.line}’s tale`, style: 'color:#e8a24c', onclick: () => openTale(w.line) }) : null),
+        told ? h('button', { class: 'cn-a', type: 'button', text: `read ${w.line}’s tale`, style: 'color:var(--cn-hi)', onclick: () => openTale(w.line) }) : null),
       h('span', { class: 'cn-row l', style: 'padding:0' }, h('span', { class: 'cn-m', text: 'change' }), sel)));
     } else box.append(h('div', { class: 'cn-row' }, h('span', { class: 'cn-m', text: w && w.line ? `“${w.line}” isn’t a line in this file` : 'Not in a line yet' }), sel));
     // Projects: breeding groups, as many as you like
@@ -3234,7 +3417,7 @@
     const cards = [...document.querySelectorAll('table[data-cave-key] .card')].filter((c) => c.querySelector('a[href*="/wolf/"]'));
     const seen = [];
     const D = denLook();
-    const kin = L && showPick ? descendants(L, showPick) : new Set();
+    const kin = L && showPick ? new Set([...descendants(L, showPick), ...[...under(L, showPick)].flatMap((k) => [...descendants(L, k)])]) : new Set();
     const mode = load('showKind', 'both');
     for (const c of cards) {
       c.classList.remove('cn-ring', 'cn-fade', 'cn-half');
@@ -3248,14 +3431,27 @@
       const pj = mode === 'blood' ? [] : projOf(w).filter((x) => lineOf(L, x));
       const own = lb || pj[0];
       if (!own) { if (showPick) c.classList.add('cn-fade'); continue; }
-      const picked = showPick && ((lb && key(lb) === key(showPick)) || pj.some((x) => key(x) === key(showPick)));
+      for (const x of c.querySelectorAll('.cn-subtag, .cn-subdots')) x.remove();
+      c.style.removeProperty('--cn-nest');
+      const picked = showPick && ((lb && under(L, showPick).has(key(lb))) || pj.some((x) => key(x) === key(showPick)));
       const near = !!(lb && kin.has(key(lb)));
       // "Only while one is picked" keeps the den plain until a line is chosen, then lights that line and its families.
       if (D.style !== 'off' && (!D.onlyPicked || picked || near)) {
-        const cs = colours(L, picked && !(lb && key(lb) === key(showPick)) ? showPick : own);
+        let cs = colours(L, picked && !(lb && under(L, showPick).has(key(lb))) ? showPick : own);
+        // A wolf in a sub-line: its whole path, from the top line down, shown the player's way.
+        const path = lb && own === lb && parentOf(L, lb) ? linePath(L, lb).map((x) => lineOf(L, x).c) : null;
+        let ringCss = null;
+        if (path) {
+          const sub = D.sub || 'nest';
+          if (sub === 'nest') c.style.setProperty('--cn-nest', path.slice(0, -1).reverse().map((col, i) => `0 0 0 calc(var(--cn-th, 6px) * ${i + 1}) ${col}`).join(', '));
+          else if (sub === 'fade') ringCss = `linear-gradient(180deg, ${path.join(', ')})`;
+          else if (sub === 'stripe') ringCss = `repeating-linear-gradient(45deg, ${path.map((col, i) => `${col} ${i * 7}px ${(i + 1) * 7}px`).join(', ')})`;
+          else if (sub === 'tag') c.append(h('span', { class: 'cn-subtag' }, h('i', { style: 'background:' + path[path.length - 2] }), linePath(L, lb).slice(-2, -1)[0] + ' ›'));
+          else if (sub === 'dots') { cs = [path[0]]; c.append(h('span', { class: 'cn-subdots' }, ...path.slice(1).map((col) => h('i', { style: 'background:' + col })))); }
+        }
         c.classList.add('cn-ring');
         if (denIsMine()) tutEv('denLined');
-        c.style.setProperty('--cn-ring', ring(cs));
+        c.style.setProperty('--cn-ring', ringCss || ring(cs));
         c.style.setProperty('--cn-glow', cs[0] + '99');
         c.style.setProperty('--cn-c1', cs[0]);
         c.style.setProperty('--cn-pie', pie(cs));
@@ -3268,7 +3464,7 @@
     if (denIsMine() && noticeNames(seen) && !hub.hidden) render();
     if (!L) return;
     const here = cards.map((c) => L.wolves[(c.querySelector('a[href*="/wolf/"]').href.match(/wolf\/(\d+)/) || [])[1]]).filter(Boolean);
-    const bloodHere = new Set(here.map((w) => key(w.line))), projHere = new Set(here.flatMap((w) => projOf(w).map(key)));
+    const bloodHere = new Set(here.flatMap((w) => (w.line && lineOf(L, w.line) ? linePath(L, w.line) : [w.line]).map(key))), projHere = new Set(here.flatMap((w) => projOf(w).map(key)));
     const shown = [...(mode !== 'proj' ? bloodOpts(L).filter((x) => bloodHere.has(key(x.n))) : []),
       ...(mode !== 'blood' ? projOpts(L).filter((x) => projHere.has(key(x.n)) && !(mode === 'both' && isBlood(x) && bloodHere.has(key(x.n)))) : [])];
     const switcher = projOpts(L).length ? h('span', { class: 'cn-seg', style: 'margin-right:6px' }, ...[['blood', 'Bloodlines'], ['proj', 'Projects'], ['both', 'Both']].map(([v, tx]) =>
